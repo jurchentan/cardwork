@@ -1,39 +1,143 @@
-import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useState } from "react";
+import { AppState, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
-import { persistSessionStart } from "@/features/sessions/infrastructure/start-session-persistence";
+import { evaluateSessionIntegrityGate } from "@/features/sessions/domain/session-integrity";
+import type { SessionRecord } from "@/features/sessions/domain/session-start";
+import {
+  claimSessionReward,
+  loadActiveSession,
+  persistSessionIntegrityCheckpoint,
+  persistSessionStart
+} from "@/features/sessions/infrastructure/start-session-persistence";
+import {
+  createSessionTimerLifecycleController,
+  recoverElapsedMsFromCheckpoint
+} from "@/features/sessions/infrastructure/session-timer-lifecycle";
 import { buildStartSessionInput } from "@/features/sessions/ui/session-start-flow";
+
+const DEBUG_MINIMUM_SESSION_DURATION_MS = 30 * 1000;
 
 export default function SessionScreen() {
   const [intentText, setIntentText] = useState("Quick focus sprint");
   const [inputMode, setInputMode] = useState<"text" | "voice">("text");
   const [isSaving, setIsSaving] = useState(false);
-  const [startedAt, setStartedAt] = useState<string | null>(null);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [isClaiming, setIsClaiming] = useState(false);
+  const [session, setSession] = useState<SessionRecord | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [tapCount, setTapCount] = useState(0);
-  const [status, setStatus] = useState<"idle" | "saving" | "started" | "error">("idle");
+  const [status, setStatus] = useState<"idle" | "saving" | "started" | "claiming" | "error">("idle");
+  const [debugFastIntegrityGateEnabled, setDebugFastIntegrityGateEnabled] = useState(false);
+
+  const minimumDurationMs = debugFastIntegrityGateEnabled ? DEBUG_MINIMUM_SESSION_DURATION_MS : undefined;
+
+  const gate = useMemo(() => {
+    if (!session) {
+      return null;
+    }
+
+    return evaluateSessionIntegrityGate({
+      startedAt: session.startedAt,
+      accumulatedMs: session.accumulatedMs,
+      minimumDurationMs
+    });
+  }, [minimumDurationMs, session]);
 
   useEffect(() => {
-    if (!startedAt) {
+    let cancelled = false;
+
+    async function hydrateSession(): Promise<void> {
+      const result = await loadActiveSession();
+      if (!result.ok || cancelled || !result.data) {
+        return;
+      }
+
+      setSession(result.data);
+      const recoveredMs = recoverElapsedMsFromCheckpoint({
+        accumulatedMs: result.data.accumulatedMs,
+        lastCheckpointAtIso: result.data.lastCheckpointAt,
+        nowMs: Date.now()
+      });
+      setElapsedSeconds(Math.floor(recoveredMs / 1000));
+      setStatus("started");
+      setStatusMessage("Recovered active session state.");
+    }
+
+    void hydrateSession();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session) {
       return;
     }
 
-    setElapsedSeconds(Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
-
     const timer = setInterval(() => {
-      setElapsedSeconds(Math.floor((Date.now() - new Date(startedAt).getTime()) / 1000));
+      const recoveredMs = recoverElapsedMsFromCheckpoint({
+        accumulatedMs: session.accumulatedMs,
+        lastCheckpointAtIso: session.lastCheckpointAt,
+        nowMs: Date.now()
+      });
+
+      setElapsedSeconds(Math.floor(recoveredMs / 1000));
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [startedAt]);
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    const stopLifecycleController = createSessionTimerLifecycleController(
+      AppState,
+      {
+        sessionId: session.id,
+        startedAtIso: session.startedAt,
+        accumulatedMs: session.accumulatedMs,
+        lastCheckpointAtIso: session.lastCheckpointAt ?? session.startedAt
+      },
+      {
+        onPersistCheckpoint: async ({ accumulatedMs, lastCheckpointAtIso }) => {
+          await persistSessionIntegrityCheckpoint({
+            sessionId: session.id,
+            accumulatedMs,
+            lastCheckpointAtIso
+          });
+
+          setSession((current) => {
+            if (!current || current.id !== session.id) {
+              return current;
+            }
+
+            return {
+              ...current,
+              accumulatedMs,
+              lastCheckpointAt: lastCheckpointAtIso,
+              updatedAt: lastCheckpointAtIso
+            };
+          });
+        },
+        onRestoreElapsed: (restoredElapsedMs) => {
+          setElapsedSeconds(Math.floor(restoredElapsedMs / 1000));
+        }
+      }
+    );
+
+    return stopLifecycleController;
+  }, [session]);
 
   async function onStartSession(): Promise<void> {
     setTapCount((value) => value + 1);
     setIsSaving(true);
     setStatus("saving");
     setErrorMessage(null);
+    setStatusMessage(null);
 
     try {
       const request = buildStartSessionInput(intentText, inputMode);
@@ -45,15 +149,58 @@ export default function SessionScreen() {
         return;
       }
 
-      setStartedAt(result.data.startedAt);
-      setSessionId(result.data.id);
+      setSession(result.data);
+      setElapsedSeconds(0);
       setStatus("started");
+      setStatusMessage("Session timer is running.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected start failure";
       setErrorMessage(message);
       setStatus("error");
     } finally {
       setIsSaving(false);
+    }
+  }
+
+  async function onClaimReward(): Promise<void> {
+    if (!session) {
+      return;
+    }
+
+    setIsClaiming(true);
+    setStatus("claiming");
+    setErrorMessage(null);
+    setStatusMessage(null);
+
+    try {
+      const result = await claimSessionReward({
+        sessionId: session.id,
+        correlationId: `session-reward-${Date.now()}`,
+        minimumDurationMs
+      });
+
+      if (!result.ok) {
+        setStatus("error");
+        setErrorMessage(result.error.message);
+        return;
+      }
+
+      setSession((current) => {
+        if (!current) {
+          return current;
+        }
+
+        return {
+          ...current,
+          accumulatedMs: result.data.elapsedMs,
+          lastCheckpointAt: new Date().toISOString(),
+          integrityStatus: "ready_for_reward"
+        };
+      });
+      setStatus("started");
+      setStatusMessage("Integrity gate passed. Reward flow can continue.");
+    } finally {
+      setIsClaiming(false);
     }
   }
 
@@ -95,14 +242,36 @@ export default function SessionScreen() {
         <Text style={styles.debugText}>Status: {status}</Text>
       </View>
 
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => setDebugFastIntegrityGateEnabled((value) => !value)}
+        style={[styles.debugToggle, debugFastIntegrityGateEnabled && styles.debugToggleActive]}
+      >
+        <Text style={styles.debugToggleLabel}>
+          Debug Gate: {debugFastIntegrityGateEnabled ? "30 seconds" : "30 minutes"}
+        </Text>
+      </Pressable>
+
       {inputMode === "voice" ? <Text style={styles.hint}>Voice uses text fallback in this story.</Text> : null}
-      {status === "started" && startedAt ? (
+      {status === "started" && session ? (
         <View style={styles.runningBanner}>
           <Text style={styles.runningTitle}>Session Started</Text>
           <Text style={styles.runningTime}>{elapsedSeconds}s</Text>
-          <Text style={styles.runningMeta}>ID: {sessionId}</Text>
+          <Text style={styles.runningMeta}>ID: {session.id}</Text>
+          <Text style={styles.runningMeta}>
+            {gate?.eligible ? "Integrity Gate: Ready" : `Integrity Gate: ${Math.ceil((gate?.remainingMs ?? 0) / 1000)}s remaining`}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            disabled={isClaiming}
+            onPress={onClaimReward}
+            style={styles.claimButton}
+          >
+            <Text style={styles.claimButtonLabel}>{isClaiming ? "Checking..." : "End Session and Claim Reward"}</Text>
+          </Pressable>
         </View>
       ) : null}
+      {statusMessage ? <Text style={styles.success}>{statusMessage}</Text> : null}
       {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
     </View>
   );
@@ -172,6 +341,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600"
   },
+  debugToggle: {
+    alignItems: "center",
+    backgroundColor: "#e5e7eb",
+    borderRadius: 8,
+    paddingVertical: 10
+  },
+  debugToggleActive: {
+    backgroundColor: "#fde68a"
+  },
+  debugToggleLabel: {
+    color: "#1f2937",
+    fontSize: 12,
+    fontWeight: "700"
+  },
   runningBanner: {
     alignItems: "center",
     backgroundColor: "#dcfce7",
@@ -198,6 +381,22 @@ const styles = StyleSheet.create({
     color: "#15803d",
     fontSize: 12,
     fontWeight: "600"
+  },
+  claimButton: {
+    alignItems: "center",
+    backgroundColor: "#166534",
+    borderRadius: 8,
+    marginTop: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  claimButtonLabel: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  success: {
+    color: "#166534"
   },
   error: {
     color: "#b91c1c"

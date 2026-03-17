@@ -22,6 +22,8 @@ type SessionRow = {
   started_at: string;
   ended_at: string | null;
   duration_seconds: number;
+  accumulated_ms: number;
+  last_checkpoint_at: string | null;
   integrity_status: string;
   created_at: string;
   updated_at: string;
@@ -52,12 +54,14 @@ export class SessionRepository {
     try {
       await this.db.withTransactionAsync(async () => {
         await this.db.runAsync(
-          "INSERT INTO sessions (id, started_at, ended_at, duration_seconds, integrity_status, created_at, updated_at) VALUES ($id, $started_at, $ended_at, $duration_seconds, $integrity_status, $created_at, $updated_at)",
+          "INSERT INTO sessions (id, started_at, ended_at, duration_seconds, accumulated_ms, last_checkpoint_at, integrity_status, created_at, updated_at) VALUES ($id, $started_at, $ended_at, $duration_seconds, $accumulated_ms, $last_checkpoint_at, $integrity_status, $created_at, $updated_at)",
           {
             $id: sessionId,
             $started_at: nowIso,
             $ended_at: null,
             $duration_seconds: 0,
+            $accumulated_ms: 0,
+            $last_checkpoint_at: nowIso,
             $integrity_status: "running",
             $created_at: nowIso,
             $updated_at: nowIso
@@ -85,6 +89,8 @@ export class SessionRepository {
           startedAt: nowIso,
           endedAt: null,
           durationSeconds: 0,
+          accumulatedMs: 0,
+          lastCheckpointAt: nowIso,
           integrityStatus: "running",
           createdAt: nowIso,
           updatedAt: nowIso
@@ -98,7 +104,7 @@ export class SessionRepository {
   async listSessions(): Promise<Result<SessionRecord[]>> {
     try {
       const rows = await this.db.getAllAsync<SessionRow>(
-        "SELECT id, started_at, ended_at, duration_seconds, integrity_status, created_at, updated_at FROM sessions ORDER BY created_at ASC"
+        "SELECT id, started_at, ended_at, duration_seconds, accumulated_ms, last_checkpoint_at, integrity_status, created_at, updated_at FROM sessions ORDER BY created_at ASC"
       );
 
       return {
@@ -123,6 +129,147 @@ export class SessionRepository {
       };
     } catch {
       return databaseErrorResult("Unable to read session intents");
+    }
+  }
+
+  async getSessionForRewardClaim(sessionId: string): Promise<Result<SessionRecord>> {
+    try {
+      const rows = await this.db.getAllAsync<SessionRow>(
+        "SELECT id, started_at, ended_at, duration_seconds, accumulated_ms, last_checkpoint_at, integrity_status, created_at, updated_at FROM sessions WHERE id = $id LIMIT 1",
+        { $id: sessionId }
+      );
+
+      const session = rows[0];
+      if (!session) {
+        return {
+          ok: false,
+          error: {
+            code: "SESSION_NOT_FOUND",
+            message: "Session record was not found",
+            retriable: false
+          }
+        };
+      }
+
+      return {
+        ok: true,
+        data: mapRowToCamelCase<SessionRecord>(session)
+      };
+    } catch {
+      return databaseErrorResult("Unable to read session for reward claim");
+    }
+  }
+
+  async saveIntegrityCheckpoint(params: {
+    sessionId: string;
+    accumulatedMs: number;
+    lastCheckpointAt: string;
+  }): Promise<Result<void>> {
+    try {
+      await this.db.runAsync(
+        "UPDATE sessions SET accumulated_ms = $accumulated_ms, last_checkpoint_at = $last_checkpoint_at, updated_at = $updated_at WHERE id = $id",
+        {
+          $id: params.sessionId,
+          $accumulated_ms: params.accumulatedMs,
+          $last_checkpoint_at: params.lastCheckpointAt,
+          $updated_at: params.lastCheckpointAt
+        }
+      );
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to persist session checkpoint");
+    }
+  }
+
+  async markSessionBlockedByIntegrityGate(params: {
+    sessionId: string;
+    accumulatedMs: number;
+    lastCheckpointAt: string;
+  }): Promise<Result<void>> {
+    try {
+      await this.db.runAsync(
+        "UPDATE sessions SET accumulated_ms = $accumulated_ms, last_checkpoint_at = $last_checkpoint_at, integrity_status = $integrity_status, updated_at = $updated_at WHERE id = $id",
+        {
+          $id: params.sessionId,
+          $accumulated_ms: params.accumulatedMs,
+          $last_checkpoint_at: params.lastCheckpointAt,
+          $integrity_status: "blocked",
+          $updated_at: params.lastCheckpointAt
+        }
+      );
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to mark session as blocked by integrity gate");
+    }
+  }
+
+  async updateIntegrityForRewardAttempt(params: {
+    sessionId: string;
+    accumulatedMs: number;
+    lastCheckpointAt: string;
+    integrityStatus: "blocked" | "ready_for_reward";
+  }): Promise<Result<void>> {
+    try {
+      await this.db.withTransactionAsync(async () => {
+        await this.db.runAsync(
+          "UPDATE sessions SET accumulated_ms = $accumulated_ms, last_checkpoint_at = $last_checkpoint_at, integrity_status = $integrity_status, updated_at = $updated_at WHERE id = $id",
+          {
+            $id: params.sessionId,
+            $accumulated_ms: params.accumulatedMs,
+            $last_checkpoint_at: params.lastCheckpointAt,
+            $integrity_status: params.integrityStatus,
+            $updated_at: params.lastCheckpointAt
+          }
+        );
+      });
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to update session integrity state for reward attempt");
+    }
+  }
+
+  async markSessionReadyForReward(params: {
+    sessionId: string;
+    accumulatedMs: number;
+    lastCheckpointAt: string;
+  }): Promise<Result<void>> {
+    try {
+      await this.db.runAsync(
+        "UPDATE sessions SET accumulated_ms = $accumulated_ms, last_checkpoint_at = $last_checkpoint_at, integrity_status = $integrity_status, updated_at = $updated_at WHERE id = $id",
+        {
+          $id: params.sessionId,
+          $accumulated_ms: params.accumulatedMs,
+          $last_checkpoint_at: params.lastCheckpointAt,
+          $integrity_status: "ready_for_reward",
+          $updated_at: params.lastCheckpointAt
+        }
+      );
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to mark session ready for reward");
+    }
+  }
+
+  async getLatestRunningSession(): Promise<Result<SessionRecord | null>> {
+    try {
+      const rows = await this.db.getAllAsync<SessionRow>(
+        "SELECT id, started_at, ended_at, duration_seconds, accumulated_ms, last_checkpoint_at, integrity_status, created_at, updated_at FROM sessions WHERE ended_at IS NULL ORDER BY created_at DESC LIMIT 1"
+      );
+
+      if (!rows[0]) {
+        return { ok: true, data: null };
+      }
+
+      return {
+        ok: true,
+        data: mapRowToCamelCase<SessionRecord>(rows[0])
+      };
+    } catch {
+      return databaseErrorResult("Unable to read active session");
     }
   }
 }

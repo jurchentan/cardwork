@@ -13,6 +13,8 @@ type SessionRow = {
   started_at: string;
   ended_at: string | null;
   duration_seconds: number;
+  accumulated_ms: number;
+  last_checkpoint_at: string | null;
   integrity_status: string;
   created_at: string;
   updated_at: string;
@@ -43,6 +45,8 @@ class FakeSessionDatabase {
         started_at: String(params.$started_at),
         ended_at: (params.$ended_at as string | null) ?? null,
         duration_seconds: Number(params.$duration_seconds),
+        accumulated_ms: Number(params.$accumulated_ms),
+        last_checkpoint_at: (params.$last_checkpoint_at as string | null) ?? null,
         integrity_status: String(params.$integrity_status),
         created_at: String(params.$created_at),
         updated_at: String(params.$updated_at)

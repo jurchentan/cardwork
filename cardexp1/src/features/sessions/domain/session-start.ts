@@ -12,7 +12,9 @@ export type SessionRecord = {
   startedAt: string;
   endedAt: string | null;
   durationSeconds: number;
-  integrityStatus: "running";
+  accumulatedMs: number;
+  lastCheckpointAt: string | null;
+  integrityStatus: "running" | "blocked" | "ready_for_reward";
   createdAt: string;
   updatedAt: string;
 };
