@@ -6,6 +6,10 @@ import type {
   SessionRecord,
   StartSessionInput
 } from "@/features/sessions/domain/session-start";
+import type {
+  ClassifierSource,
+  WorkTypeTag
+} from "@/features/classification/domain/work-type";
 
 import { databaseErrorResult, mapRowToCamelCase } from "./mappers";
 
@@ -34,8 +38,8 @@ type SessionIntentRow = {
   session_id: string;
   intent_text: string;
   input_mode: string;
-  work_type_tag: string | null;
-  classifier_source: string | null;
+  work_type_tag: WorkTypeTag | null;
+  classifier_source: ClassifierSource | null;
   created_at: string;
 };
 
@@ -76,7 +80,7 @@ export class SessionRepository {
             $intent_text: input.intentText,
             $input_mode: input.inputMode,
             $work_type_tag: null,
-            $classifier_source: "manual",
+            $classifier_source: null,
             $created_at: nowIso
           }
         );
@@ -129,6 +133,27 @@ export class SessionRepository {
       };
     } catch {
       return databaseErrorResult("Unable to read session intents");
+    }
+  }
+
+  async updateIntentClassification(input: {
+    sessionId: string;
+    workTypeTag: WorkTypeTag;
+    classifierSource: ClassifierSource;
+  }): Promise<Result<void>> {
+    try {
+      await this.db.runAsync(
+        "UPDATE session_intents SET work_type_tag = $work_type_tag, classifier_source = $classifier_source WHERE id = (SELECT id FROM session_intents WHERE session_id = $session_id ORDER BY created_at DESC LIMIT 1)",
+        {
+          $session_id: input.sessionId,
+          $work_type_tag: input.workTypeTag,
+          $classifier_source: input.classifierSource
+        }
+      );
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to persist intent classification");
     }
   }
 

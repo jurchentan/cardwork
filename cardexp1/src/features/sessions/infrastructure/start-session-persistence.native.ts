@@ -1,5 +1,8 @@
 import { initializeDatabase } from "@/database/client";
 import { SessionRepository } from "@/database/repositories/session-repository";
+import { classifyAndPersistSessionIntent } from "@/features/classification/application/classify-and-persist-session-intent";
+import { createRemoteClassifierProvider } from "@/features/classification/infrastructure/remote-classifier-provider";
+import type { WorkTypeTag } from "@/features/classification/domain/work-type";
 import { attemptSessionRewardClaim } from "@/features/sessions/application/attempt-session-reward";
 import { startSession } from "@/features/sessions/application/start-session";
 import type { SessionRecord, StartSessionInput } from "@/features/sessions/domain/session-start";
@@ -50,6 +53,42 @@ export async function claimSessionReward(input: {
       }
     }
   );
+}
+
+export async function classifySessionIntentWithFallback(input: {
+  sessionId: string;
+  intentText: string;
+}): Promise<
+  Result<{
+    classification: { workTypeTag: WorkTypeTag; classifierSource: "remote" } | null;
+    requiresManualSelection: boolean;
+    manualOptions: { tag: WorkTypeTag; label: string }[];
+    failure?: {
+      code: string;
+      message: string;
+      retriable: boolean;
+    };
+  }>
+> {
+  const db = await initializeDatabase();
+  const repository = new SessionRepository(db);
+  const classifier = createRemoteClassifierProvider();
+
+  return classifyAndPersistSessionIntent(repository, classifier, input);
+}
+
+export async function persistManualIntentClassification(input: {
+  sessionId: string;
+  workTypeTag: WorkTypeTag;
+}): Promise<Result<void>> {
+  const db = await initializeDatabase();
+  const repository = new SessionRepository(db);
+
+  return repository.updateIntentClassification({
+    sessionId: input.sessionId,
+    workTypeTag: input.workTypeTag,
+    classifierSource: "manual"
+  });
 }
 
 export async function loadActiveSession(): Promise<Result<SessionRecord | null>> {

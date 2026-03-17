@@ -1,4 +1,7 @@
 import type { SessionRecord, StartSessionInput } from "@/features/sessions/domain/session-start";
+import { classifyAndPersistSessionIntent } from "@/features/classification/application/classify-and-persist-session-intent";
+import { createRemoteClassifierProvider } from "@/features/classification/infrastructure/remote-classifier-provider";
+import type { ClassifierSource, WorkTypeTag } from "@/features/classification/domain/work-type";
 import { attemptSessionRewardClaim } from "@/features/sessions/application/attempt-session-reward";
 import type { Result } from "@/shared/result/result";
 
@@ -19,8 +22,8 @@ type StoredSessionIntent = {
   sessionId: string;
   intentText: string;
   inputMode: "text" | "voice";
-  workTypeTag: string | null;
-  classifierSource: string | null;
+  workTypeTag: WorkTypeTag | null;
+  classifierSource: ClassifierSource | null;
   createdAt: string;
 };
 
@@ -84,7 +87,7 @@ export async function persistSessionStart(input: StartSessionInput): Promise<Res
     intentText: input.intentText.trim(),
     inputMode: input.inputMode,
     workTypeTag: null,
-    classifierSource: "manual",
+    classifierSource: null,
     createdAt: nowIso
   };
 
@@ -213,6 +216,97 @@ export async function claimSessionReward(input: {
       }
     }
   );
+}
+
+function updateStoredSessionIntent(
+  sessionId: string,
+  updater: (intent: StoredSessionIntent) => StoredSessionIntent
+): Result<StoredSessionIntent> {
+  const intents = readStoredArray<StoredSessionIntent>(WEB_SESSION_INTENTS_KEY);
+  const intentIndex = [...intents]
+    .map((intent, index) => ({ intent, index }))
+    .filter((entry) => entry.intent.sessionId === sessionId)
+    .sort((left, right) => right.intent.createdAt.localeCompare(left.intent.createdAt))[0]?.index;
+
+  if (intentIndex === undefined) {
+    return {
+      ok: false,
+      error: {
+        code: "SESSION_INTENT_NOT_FOUND",
+        message: "Session intent was not found",
+        retriable: false
+      }
+    };
+  }
+
+  const updated = updater(intents[intentIndex]);
+  intents[intentIndex] = updated;
+  writeStoredArray(WEB_SESSION_INTENTS_KEY, intents);
+
+  return {
+    ok: true,
+    data: updated
+  };
+}
+
+export async function classifySessionIntentWithFallback(input: {
+  sessionId: string;
+  intentText: string;
+}): Promise<
+  Result<{
+    classification: { workTypeTag: WorkTypeTag; classifierSource: "remote" } | null;
+    requiresManualSelection: boolean;
+    manualOptions: { tag: WorkTypeTag; label: string }[];
+    failure?: {
+      code: string;
+      message: string;
+      retriable: boolean;
+    };
+  }>
+> {
+  const classifier = createRemoteClassifierProvider({
+    isOnline: () => (typeof navigator !== "undefined" ? navigator.onLine : true)
+  });
+
+  return classifyAndPersistSessionIntent(
+    {
+      async updateIntentClassification(classificationInput) {
+        const updated = updateStoredSessionIntent(classificationInput.sessionId, (intent) => ({
+          ...intent,
+          workTypeTag: classificationInput.workTypeTag,
+          classifierSource: classificationInput.classifierSource
+        }));
+
+        if (!updated.ok) {
+          return updated;
+        }
+
+        return { ok: true, data: undefined };
+      }
+    },
+    classifier,
+    {
+      sessionId: input.sessionId,
+      intentText: input.intentText
+    }
+  );
+}
+
+export async function persistManualIntentClassification(input: {
+  sessionId: string;
+  workTypeTag: WorkTypeTag;
+}): Promise<Result<void>> {
+  const updated = updateStoredSessionIntent(input.sessionId, (intent) => ({
+    ...intent,
+    workTypeTag: input.workTypeTag,
+    classifierSource: "manual"
+  }));
+
+  if (!updated.ok) {
+    return updated;
+  }
+
+  return { ok: true, data: undefined };
 }
 
 export async function loadActiveSession(): Promise<Result<SessionRecord | null>> {

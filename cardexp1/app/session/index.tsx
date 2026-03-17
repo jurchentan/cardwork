@@ -5,7 +5,9 @@ import { evaluateSessionIntegrityGate } from "@/features/sessions/domain/session
 import type { SessionRecord } from "@/features/sessions/domain/session-start";
 import {
   claimSessionReward,
+  classifySessionIntentWithFallback,
   loadActiveSession,
+  persistManualIntentClassification,
   persistSessionIntegrityCheckpoint,
   persistSessionStart
 } from "@/features/sessions/infrastructure/start-session-persistence";
@@ -14,6 +16,7 @@ import {
   recoverElapsedMsFromCheckpoint
 } from "@/features/sessions/infrastructure/session-timer-lifecycle";
 import { buildStartSessionInput } from "@/features/sessions/ui/session-start-flow";
+import type { WorkTypeTag } from "@/features/classification/domain/work-type";
 
 const DEBUG_MINIMUM_SESSION_DURATION_MS = 30 * 1000;
 
@@ -21,6 +24,8 @@ export default function SessionScreen() {
   const [intentText, setIntentText] = useState("Quick focus sprint");
   const [inputMode, setInputMode] = useState<"text" | "voice">("text");
   const [isSaving, setIsSaving] = useState(false);
+  const [isClassifyingSession, setIsClassifyingSession] = useState(false);
+  const [isSavingManualTag, setIsSavingManualTag] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -29,6 +34,8 @@ export default function SessionScreen() {
   const [tapCount, setTapCount] = useState(0);
   const [status, setStatus] = useState<"idle" | "saving" | "started" | "claiming" | "error">("idle");
   const [debugFastIntegrityGateEnabled, setDebugFastIntegrityGateEnabled] = useState(false);
+  const [classifiedTag, setClassifiedTag] = useState<string | null>(null);
+  const [manualTagOptions, setManualTagOptions] = useState<{ tag: WorkTypeTag; label: string }[]>([]);
 
   const minimumDurationMs = debugFastIntegrityGateEnabled ? DEBUG_MINIMUM_SESSION_DURATION_MS : undefined;
 
@@ -153,12 +160,65 @@ export default function SessionScreen() {
       setElapsedSeconds(0);
       setStatus("started");
       setStatusMessage("Session timer is running.");
+
+      setIsClassifyingSession(true);
+      const classificationResult = await classifySessionIntentWithFallback({
+        sessionId: result.data.id,
+        intentText: request.intentText
+      });
+
+      if (!classificationResult.ok) {
+        setErrorMessage(classificationResult.error.message);
+        setStatus("error");
+        return;
+      }
+
+      if (classificationResult.data.classification) {
+        setManualTagOptions([]);
+        setClassifiedTag(classificationResult.data.classification.workTypeTag);
+        setStatusMessage(`Session timer is running. Tagged as ${classificationResult.data.classification.workTypeTag}.`);
+        return;
+      }
+
+      setClassifiedTag(null);
+      setManualTagOptions(classificationResult.data.manualOptions);
+      setStatusMessage("Session timer is running. Choose a work type manually to continue.");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unexpected start failure";
       setErrorMessage(message);
       setStatus("error");
     } finally {
+      setIsClassifyingSession(false);
       setIsSaving(false);
+    }
+  }
+
+  async function onSelectManualTag(workTypeTag: WorkTypeTag): Promise<void> {
+    if (!session) {
+      return;
+    }
+
+    setIsSavingManualTag(true);
+    setErrorMessage(null);
+
+    try {
+      const persisted = await persistManualIntentClassification({
+        sessionId: session.id,
+        workTypeTag
+      });
+
+      if (!persisted.ok) {
+        setErrorMessage(persisted.error.message);
+        setStatus("error");
+        return;
+      }
+
+      setClassifiedTag(workTypeTag);
+      setManualTagOptions([]);
+      setStatusMessage(`Session timer is running. Manual tag selected: ${workTypeTag}.`);
+      setStatus("started");
+    } finally {
+      setIsSavingManualTag(false);
     }
   }
 
@@ -232,6 +292,9 @@ export default function SessionScreen() {
         style={styles.input}
         value={intentText}
       />
+      <Text style={styles.aiNote}>
+        AI note: more specific goals improve classification quality (for example, "Write 400 words of the intro" instead of "Work").
+      </Text>
 
       <Pressable accessibilityRole="button" disabled={isSaving} onPress={onStartSession} style={styles.startButton}>
         <Text style={styles.startButtonLabel}>{isSaving ? "Starting..." : "Start Session"}</Text>
@@ -240,6 +303,7 @@ export default function SessionScreen() {
       <View style={styles.debugBox}>
         <Text style={styles.debugText}>Button taps: {tapCount}</Text>
         <Text style={styles.debugText}>Status: {status}</Text>
+        <Text style={styles.debugText}>Classifying: {isClassifyingSession ? "yes" : "no"}</Text>
       </View>
 
       <Pressable
@@ -253,6 +317,26 @@ export default function SessionScreen() {
       </Pressable>
 
       {inputMode === "voice" ? <Text style={styles.hint}>Voice uses text fallback in this story.</Text> : null}
+      {manualTagOptions.length ? (
+        <View style={styles.manualTagBox}>
+          <Text style={styles.manualTagTitle}>Select Work Type</Text>
+          <View style={styles.manualTagRow}>
+            {manualTagOptions.map((option) => (
+              <Pressable
+                key={option.tag}
+                accessibilityRole="button"
+                disabled={isSavingManualTag}
+                onPress={() => {
+                  void onSelectManualTag(option.tag);
+                }}
+                style={styles.manualTagButton}
+              >
+                <Text style={styles.manualTagButtonLabel}>{option.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
       {status === "started" && session ? (
         <View style={styles.runningBanner}>
           <Text style={styles.runningTitle}>Session Started</Text>
@@ -261,6 +345,7 @@ export default function SessionScreen() {
           <Text style={styles.runningMeta}>
             {gate?.eligible ? "Integrity Gate: Ready" : `Integrity Gate: ${Math.ceil((gate?.remainingMs ?? 0) / 1000)}s remaining`}
           </Text>
+          <Text style={styles.runningMeta}>Work Type: {classifiedTag ?? "pending"}</Text>
           <Pressable
             accessibilityRole="button"
             disabled={isClaiming}
@@ -315,6 +400,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10
   },
+  aiNote: {
+    color: "#475569",
+    fontSize: 12
+  },
   startButton: {
     alignItems: "center",
     backgroundColor: "#0a7ea4",
@@ -352,6 +441,35 @@ const styles = StyleSheet.create({
   },
   debugToggleLabel: {
     color: "#1f2937",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  manualTagBox: {
+    backgroundColor: "#eff6ff",
+    borderColor: "#93c5fd",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    padding: 10
+  },
+  manualTagTitle: {
+    color: "#1e3a8a",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  manualTagRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8
+  },
+  manualTagButton: {
+    backgroundColor: "#dbeafe",
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8
+  },
+  manualTagButtonLabel: {
+    color: "#1e40af",
     fontSize: 12,
     fontWeight: "700"
   },
