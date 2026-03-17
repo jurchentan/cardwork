@@ -1,0 +1,96 @@
+# generated: 2026-03-17T03:03:36+00:00
+# last_updated: 2026-03-17T03:03:36+00:00
+# project: cardexp1
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /home/jack.ark/alex/cardexp1/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - SM typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-03-17T03:03:36+00:00
+last_updated: 2026-03-17T03:17:00+00:00
+project: cardexp1
+project_key: NOKEY
+tracking_system: file-system
+story_location: /home/jack.ark/alex/cardexp1/_bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: in-progress
+  1-1-initialize-mobile-foundation-with-expo-starter: ready-for-dev
+  1-2-capture-session-intent-and-start-a-session-in-two-taps: backlog
+  1-3-classify-intent-with-offline-manual-fallback: backlog
+  1-4-enforce-30-minute-integrity-gate-with-reliable-timer: backlog
+  1-5-submit-reflection-and-run-plausibility-check: backlog
+  1-6-award-and-reveal-card-then-persist-session-outcome: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-define-card-domain-model-and-persistence-mapping: backlog
+  2-2-render-full-card-face-with-type-clarity: backlog
+  2-3-enforce-daily-earn-limit-and-weekly-deck-cap: backlog
+  2-4-issue-monday-starter-cards-automatically: backlog
+  2-5-support-duplicate-cards-in-weekly-deck: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-unlock-and-enter-daily-mini-battle-from-valid-day-state: backlog
+  3-2-initialize-battle-board-with-correct-daily-deck-and-layout: backlog
+  3-3-execute-core-turn-loop-draw-3-play-1-discard-2: backlog
+  3-4-resolve-card-effects-selective-costs-and-deck-reshuffle: backlog
+  3-5-show-enemy-intent-and-execute-enemy-phase-deterministically: backlog
+  3-6-complete-battle-outcomes-with-rewards-and-consequences: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-execute-monday-reset-and-start-new-weekly-cycle: backlog
+  4-2-capture-weekly-epic-declaration: backlog
+  4-3-gate-weekly-boss-access-to-end-of-week-window: backlog
+  4-4-run-multi-stage-weekly-boss-with-full-weekly-deck: backlog
+  4-5-tune-stage-accessibility-and-mastery-targets: backlog
+  4-6-resolve-weekly-boss-outcomes-and-meta-xp: backlog
+  4-7-present-weekly-results-screen: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-surface-the-correct-next-action-on-home: backlog
+  5-2-implement-visual-system-for-cardwork-s-light-bold-style: backlog
+  5-3-deliver-priority-card-reveal-animation: backlog
+  5-4-ensure-input-parity-across-desktop-and-mobile: backlog
+  5-5-enforce-mobile-tap-target-accessibility-minimums: backlog
+  5-6-schedule-and-trigger-engagement-notifications: backlog
+  epic-5-retrospective: optional
+
+  epic-6: backlog
+  6-1-establish-offline-first-local-data-layer-with-sqlite: backlog
+  6-2-implement-crash-safe-write-and-recovery-guarantees: backlog
+  6-3-build-offline-ai-fallback-and-intent-outbox-handling: backlog
+  6-4-meet-cold-start-performance-budget: backlog
+  6-5-meet-instant-session-log-screen-performance-target: backlog
+  epic-6-retrospective: optional

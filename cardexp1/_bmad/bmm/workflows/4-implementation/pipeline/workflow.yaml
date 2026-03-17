@@ -1,0 +1,28 @@
+name: pipeline
+description: 'Execute the full autonomous BMAD pipeline - story validation, TDD implementation, testing, linting, and code review in one continuous run'
+
+# Critical variables from config
+config_source: "{project-root}/_bmad/bmm/config.yaml"
+user_name: "{config_source}:user_name"
+communication_language: "{config_source}:communication_language"
+user_skill_level: "{config_source}:user_skill_level"
+document_output_language: "{config_source}:document_output_language"
+date: system-generated
+
+# Workflow components
+installed_path: "{project-root}/_bmad/bmm/workflows/4-implementation/pipeline"
+instructions: "{installed_path}/instructions.xml"
+validation: "{installed_path}/checklist.md"
+
+# Pipeline configuration
+story_file: "" # Explicit story path; auto-discovered if empty
+implementation_artifacts: "{config_source}:implementation_artifacts"
+sprint_status: "{implementation_artifacts}/sprint-status.yaml"
+project_context: "**/project-context.md"
+architecture_docs: "{project-root}/_bmad-output/planning-artifacts/*architecture*.md"
+epic_docs: "{project-root}/_bmad-output/planning-artifacts/*epic*.md"
+
+# Pipeline behavior
+skip_code_review: false # Set to true to skip Phase 5 (not recommended)
+auto_fix_lint: true # Automatically fix linting errors where possible
+max_implementation_retries: 3 # Stop after N consecutive task failures

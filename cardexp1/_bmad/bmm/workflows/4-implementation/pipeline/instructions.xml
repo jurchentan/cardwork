@@ -1,0 +1,548 @@
+<workflow>
+  <critical>The workflow execution engine is governed by: {project-root}/_bmad/core/tasks/workflow.xml</critical>
+  <critical>You MUST have already loaded and processed: {installed_path}/workflow.yaml</critical>
+  <critical>Communicate all responses in {communication_language} and language MUST be tailored to {user_skill_level}</critical>
+  <critical>Generate all documents in {document_output_language}</critical>
+  <critical>AUTONOMOUS EXECUTION: Execute ALL 6 phases continuously without pausing for user confirmation</critical>
+  <critical>Only HALT for genuine blockers: missing ACs/Tasks, 3 consecutive failures, architecture decisions, missing dependencies</critical>
+  <critical>Update story file after EACH task completion - never batch updates</critical>
+  <critical>Execute phases in exact order: INIT → VALIDATION → IMPLEMENTATION → TESTING/LINT → DOD → CODE REVIEW → SUMMARY</critical>
+
+  <!-- ============================================================= -->
+  <!-- PHASE 0: INIT - Discover and validate target story           -->
+  <!-- ============================================================= -->
+  <phase n="0" name="INIT" icon="⚡">
+    <output>⚡ **PHASE 0: INIT**
+Starting pipeline execution...
+</output>
+
+    <step n="0.1" goal="Parse story_file argument if provided">
+      <check if="{{story_file}} is provided via workflow invocation">
+        <action>Use {{story_file}} directly as story path</action>
+        <action>Read COMPLETE story file</action>
+        <action>Extract story_key from filename (e.g., "1-2-user-auth" from "1-2-user-auth.md")</action>
+        <goto anchor="story_loaded" />
+      </check>
+    </step>
+
+    <step n="0.2" goal="Auto-discover next ready story from sprint-status.yaml">
+      <check if="{{sprint_status}} file exists">
+        <action>Load FULL sprint-status.yaml from: {{sprint_status}}</action>
+        <action>Read ALL development_status entries from top to bottom</action>
+        <action>Find FIRST story where:
+          - Key matches pattern: number-number-name (e.g., "1-2-user-auth")
+          - NOT an epic key or retrospective
+          - Status = "ready-for-dev"
+        </action>
+
+        <check if="ready-for-dev story found">
+          <action>Store story_key</action>
+          <action>Construct story file path: {implementation_artifacts}/{{story_key}}.md</action>
+          <action>Read COMPLETE story file</action>
+          <goto anchor="story_loaded" />
+        </check>
+
+        <check if="no ready-for-dev story found">
+          <output>📋 **HALT: No ready-for-dev stories**
+
+Current sprint status shows no stories ready for development.
+
+**Options:**
+1. Run SM agent → [CS] Create Story to generate next story
+2. Run SM agent → [SP] Sprint Planning to organize sprint
+3. Provide explicit story file path to pipeline
+
+</output>
+          <action>HALT - awaiting story creation or explicit path</action>
+        </check>
+      </check>
+
+      <check if="{{sprint_status}} file does NOT exist">
+        <output>⚠️  **HALT: Missing sprint-status.yaml**
+
+Pipeline requires sprint-status.yaml for story discovery.
+
+**Next steps:**
+1. Run SM agent → [SP] Sprint Planning to create sprint-status.yaml
+2. Or provide explicit story file path to pipeline
+
+</output>
+        <action>HALT - sprint planning required</action>
+      </check>
+    </step>
+
+    <anchor id="story_loaded" />
+
+    <step n="0.3" goal="Validate story file structure">
+      <action>Parse story file sections: Story, Acceptance Criteria, Tasks/Subtasks, Dev Notes, Dev Agent Record, File List, Change Log, Status</action>
+      
+      <output>✅ **Story discovered:** {{story_key}}
+📄 **File:** {{story_file_path}}
+</output>
+
+      <action>Proceed to Phase 1</action>
+    </step>
+  </phase>
+
+  <!-- ============================================================= -->
+  <!-- PHASE 1: STORY VALIDATION & PREPARATION                      -->
+  <!-- ============================================================= -->
+  <phase n="1" name="VALIDATION" icon="📋">
+    <output>📋 **PHASE 1: STORY VALIDATION & PREPARATION**
+Validating story structure and enriching context...
+</output>
+
+    <step n="1.1" goal="Validate Acceptance Criteria exist">
+      <check if="Acceptance Criteria section is missing or empty">
+        <output>❌ **HALT: Missing Acceptance Criteria**
+
+Story {{story_key}} has no acceptance criteria. Cannot implement without testable ACs.
+
+**Fix:** Run SM agent → [CS] Create Story to regenerate with ACs
+</output>
+        <action>HALT - missing acceptance criteria</action>
+      </check>
+
+      <output>✅ Acceptance Criteria validated: {{ac_count}} criteria found</output>
+    </step>
+
+    <step n="1.2" goal="Validate Tasks/Subtasks exist">
+      <check if="Tasks/Subtasks section is missing or empty">
+        <output>❌ **HALT: Missing Tasks**
+
+Story {{story_key}} has no tasks/subtasks. Cannot implement without task breakdown.
+
+**Fix:** Run SM agent → [CS] Create Story to regenerate with tasks
+</output>
+        <action>HALT - missing tasks</action>
+      </check>
+
+      <action>Count total tasks and subtasks</action>
+      <action>Identify all unchecked tasks</action>
+      <output>✅ Tasks validated: {{task_count}} tasks found ({{incomplete_count}} incomplete)</output>
+    </step>
+
+    <step n="1.3" goal="Enrich Dev Notes from architecture docs">
+      <action>Load {project_context} if exists</action>
+      <action>Load architecture docs from: {{architecture_docs}}</action>
+      <action>Extract relevant architectural context for this story</action>
+      
+      <check if="Dev Notes section is sparse or empty">
+        <action>Append architectural context to Dev Notes section in story file</action>
+        <action>Include: coding patterns, technical constraints, integration points</action>
+        <output>✅ Dev Notes enriched with architectural context</output>
+      </check>
+
+      <check if="Dev Notes already comprehensive">
+        <output>✅ Dev Notes already contain sufficient context</output>
+      </check>
+    </step>
+
+    <step n="1.4" goal="Update story status to in-progress">
+      <action>Update Status section in story file: ready-for-dev → in-progress</action>
+      <action>Update {{sprint_status}} file: story status → in-progress</action>
+      <output>✅ Story status updated to in-progress</output>
+    </step>
+
+    <output>✅ **Phase 1 complete** - Story validated and ready for implementation</output>
+  </phase>
+
+  <!-- ============================================================= -->
+  <!-- PHASE 2: IMPLEMENTATION (TDD)                                 -->
+  <!-- ============================================================= -->
+  <phase n="2" name="IMPLEMENTATION" icon="💻">
+    <output>💻 **PHASE 2: IMPLEMENTATION (TDD)**
+Executing tasks using Red→Green→Refactor cycle...
+</output>
+
+    <step n="2.1" goal="Execute each task with TDD">
+      <loop for="each unchecked task/subtask in order">
+        <output>🔄 **Task {{task_number}}:** {{task_description}}</output>
+
+        <!-- RED: Write failing test -->
+        <step n="2.1.1" goal="Write failing test">
+          <action>Analyze task requirements</action>
+          <action>Write comprehensive test(s) for this task</action>
+          <action>Test type based on task: unit, integration, or E2E</action>
+          <action>Run test suite - confirm new test(s) FAIL</action>
+          
+          <check if="test does not fail">
+            <output>⚠️  Test should fail before implementation - revise test</output>
+            <action>Revise test to properly detect missing functionality</action>
+          </check>
+
+          <output>🔴 **RED:** Failing test(s) written for task {{task_number}}</output>
+        </step>
+
+        <!-- GREEN: Implement to pass test -->
+        <step n="2.1.2" goal="Implement functionality">
+          <action>Implement code to satisfy task requirements</action>
+          <action>Follow coding standards from {project_context}</action>
+          <action>Apply patterns from Dev Notes</action>
+          <action>Run test suite - confirm new test(s) PASS</action>
+
+          <check if="tests still fail">
+            <action>Debug implementation</action>
+            <action>Increment failure counter for this task</action>
+
+            <check if="failure_counter >= {{max_implementation_retries}}">
+              <output>❌ **HALT: 3 consecutive failures**
+
+Task {{task_number}} failed {{max_implementation_retries}} times.
+
+**Last error:** {{error_message}}
+
+**Fix:** Review task requirements or break into smaller tasks
+</output>
+              <action>HALT - repeated implementation failure</action>
+            </check>
+
+            <action>Retry implementation with different approach</action>
+          </check>
+
+          <output>🟢 **GREEN:** Tests passing for task {{task_number}}</output>
+        </step>
+
+        <!-- REFACTOR: Improve code quality -->
+        <step n="2.1.3" goal="Refactor">
+          <action>Review implementation for code quality</action>
+          <action>Apply refactoring: extract functions, improve naming, remove duplication</action>
+          <action>Run test suite - confirm tests STILL PASS after refactor</action>
+          <output>♻️  **REFACTOR:** Code quality improved for task {{task_number}}</output>
+        </step>
+
+        <!-- REGRESSION: Run full test suite -->
+        <step n="2.1.4" goal="Regression testing">
+          <action>Run COMPLETE test suite (all existing + new tests)</action>
+
+          <check if="any tests fail">
+            <output>❌ **Regression failure detected**
+
+Task {{task_number}} broke existing functionality.
+
+**Fix:** Revise implementation to not break existing tests
+</output>
+            <action>Revise implementation</action>
+            <action>Re-run full test suite until 100% pass</action>
+          </check>
+
+          <output>✅ **Full test suite passing (100%)**</output>
+        </step>
+
+        <!-- UPDATE STORY FILE -->
+        <step n="2.1.5" goal="Update story file">
+          <action>Mark task [x] in Tasks/Subtasks section</action>
+          <action>Add entry to File List: all files created/modified for this task</action>
+          <action>Add entry to Change Log: summary of what was implemented</action>
+          <action>Update Dev Agent Record → Debug Log with any decisions or notes</action>
+          <action>Save story file immediately</action>
+          <output>✅ Task {{task_number}} complete and documented</output>
+        </step>
+
+        <action>Reset failure_counter</action>
+        <action>Continue to next unchecked task</action>
+      </loop>
+
+      <output>✅ **Phase 2 complete** - All tasks implemented with passing tests</output>
+    </step>
+  </phase>
+
+  <!-- ============================================================= -->
+  <!-- PHASE 3: FULL TEST SUITE + LINTING                           -->
+  <!-- ============================================================= -->
+  <phase n="3" name="TESTING_LINT" icon="🧪">
+    <output>🧪 **PHASE 3: FULL TEST SUITE + LINTING**
+Running comprehensive quality checks...
+</output>
+
+    <step n="3.1" goal="Run complete test suite">
+      <action>Execute full test suite: unit + integration + E2E</action>
+      
+      <check if="any tests fail">
+        <output>❌ **Test failures detected**
+
+{{failed_test_count}} tests failing after implementation.
+
+**Failures:**
+{{failed_test_list}}
+
+**Fix:** Debug and resolve all failures before proceeding
+</output>
+        <action>Debug and fix failing tests</action>
+        <action>Re-run until 100% pass</action>
+      </check>
+
+      <action>Capture test results: total, passed, failed, skipped</action>
+      <output>✅ **All tests passing:** {{total_test_count}} tests (100%)</output>
+    </step>
+
+    <step n="3.2" goal="Run type checker">
+      <check if="TypeScript project (tsconfig.json exists)">
+        <action>Run: pnpm typecheck (or tsc --noEmit)</action>
+
+        <check if="type errors found">
+          <check if="errors require architecture decision">
+            <output>⚠️  **HALT: Type errors require decision**
+
+{{type_error_summary}}
+
+**Decision needed:** How should these types be resolved?
+</output>
+            <action>HALT - architecture decision required</action>
+          </check>
+
+          <check if="errors are fixable">
+            <action>Fix type errors automatically</action>
+            <action>Re-run type checker until clean</action>
+          </check>
+        </check>
+
+        <output>✅ **Type checking:** No errors</output>
+      </check>
+    </step>
+
+    <step n="3.3" goal="Run linter">
+      <action>Identify linter: ESLint, Pylint, etc.</action>
+      <action>Run linter: pnpm lint (or equivalent)</action>
+
+      <check if="lint errors found">
+        <check if="{{auto_fix_lint}} is true">
+          <action>Run linter with auto-fix: pnpm lint --fix</action>
+          <action>Re-run linter to verify fixes</action>
+
+          <check if="errors remain after auto-fix">
+            <output>⚠️  **HALT: Lint errors can't be auto-fixed**
+
+{{lint_error_summary}}
+
+**Manual fixes required:** {{error_file_list}}
+</output>
+            <action>HALT - manual lint fixes needed</action>
+          </check>
+
+          <output>✅ **Linting:** All auto-fixable errors resolved</output>
+        </check>
+
+        <check if="{{auto_fix_lint}} is false">
+          <output>⚠️  **HALT: Lint errors found**
+
+{{lint_error_summary}}
+
+Set auto_fix_lint: true in workflow.yaml for auto-fix.
+</output>
+          <action>HALT - lint errors require fixing</action>
+        </check>
+      </check>
+
+      <output>✅ **Linting:** No errors</output>
+    </step>
+
+    <step n="3.4" goal="Run formatter check">
+      <action>Run formatter check: pnpm format:check</action>
+
+      <check if="formatting issues found">
+        <action>Run formatter: pnpm format</action>
+        <output>✅ **Formatting:** Applied project formatting</output>
+      </check>
+
+      <output>✅ **Formatting:** Compliant</output>
+    </step>
+
+    <output>✅ **Phase 3 complete** - All quality gates passed</output>
+  </phase>
+
+  <!-- ============================================================= -->
+  <!-- PHASE 4: DEFINITION OF DONE                                   -->
+  <!-- ============================================================= -->
+  <phase n="4" name="DOD" icon="✅">
+    <output>✅ **PHASE 4: DEFINITION OF DONE**
+Verifying story completion criteria...
+</output>
+
+    <step n="4.1" goal="Verify all ACs satisfied">
+      <action>For each Acceptance Criterion:</action>
+      <action>- Verify implementation addresses the AC</action>
+      <action>- Confirm test coverage exists for the AC</action>
+
+      <check if="any AC not satisfied">
+        <output>⚠️  **AC not satisfied:** {{ac_id}}
+
+{{ac_description}}
+
+**Action:** Return to Phase 2 to address this AC
+</output>
+        <action>Add missing implementation/tests</action>
+        <goto phase="2" />
+      </check>
+
+      <output>✅ All acceptance criteria satisfied</output>
+    </step>
+
+    <step n="4.2" goal="Verify all tasks checked">
+      <action>Scan Tasks/Subtasks section for any unchecked [ ] items</action>
+
+      <check if="unchecked tasks remain">
+        <output>⚠️  **Incomplete tasks found**
+
+{{incomplete_task_list}}
+
+**Action:** Return to Phase 2 to complete these tasks
+</output>
+        <goto phase="2" />
+      </check>
+
+      <output>✅ All tasks/subtasks complete: {{task_count}}/{{task_count}}</output>
+    </step>
+
+    <step n="4.3" goal="Verify File List is complete">
+      <action>Check File List section in story file</action>
+
+      <check if="File List is empty">
+        <action>Generate File List from git diff</action>
+        <action>Add all modified/created files to File List section</action>
+        <action>Save story file</action>
+      </check>
+
+      <output>✅ File List complete: {{file_count}} files</output>
+    </step>
+
+    <step n="4.4" goal="Verify Dev Agent Record has notes">
+      <action>Check Dev Agent Record → Completion Notes</action>
+
+      <check if="Completion Notes is empty">
+        <action>Generate summary of implementation: approach, decisions, patterns used</action>
+        <action>Add to Completion Notes in story file</action>
+        <action>Save story file</action>
+      </check>
+
+      <output>✅ Dev Agent Record documented</output>
+    </step>
+
+    <step n="4.5" goal="Verify Change Log has entry">
+      <action>Check Change Log section</action>
+
+      <check if="no entry for this implementation">
+        <action>Add Change Log entry: date, summary of changes</action>
+        <action>Save story file</action>
+      </check>
+
+      <output>✅ Change Log updated</output>
+    </step>
+
+    <step n="4.6" goal="Update story status to review">
+      <action>Update Status section in story file: in-progress → review</action>
+      <action>Update {{sprint_status}} file: story status → review</action>
+      <action>Save both files</action>
+      <output>✅ Story status: **review**</output>
+    </step>
+
+    <output>✅ **Phase 4 complete** - Story meets definition of done</output>
+  </phase>
+
+  <!-- ============================================================= -->
+  <!-- PHASE 5: CODE REVIEW                                          -->
+  <!-- ============================================================= -->
+  <phase n="5" name="CODE_REVIEW" icon="🔍">
+    <check if="{{skip_code_review}} is true">
+      <output>⚠️  **PHASE 5: CODE REVIEW - SKIPPED**
+(skip_code_review: true in workflow.yaml)
+</output>
+      <goto phase="6" />
+    </check>
+
+    <output>🔍 **PHASE 5: CODE REVIEW**
+Running BMAD code review workflow...
+</output>
+
+    <step n="5.1" goal="Execute code review workflow">
+      <action>Load code review workflow: {project-root}/_bmad/bmm/workflows/4-implementation/code-review/workflow.yaml</action>
+      <action>Execute code review against all changed files from File List</action>
+      <action>Capture findings: CRITICAL, HIGH, MEDIUM, LOW severity</action>
+    </step>
+
+    <step n="5.2" goal="Auto-address HIGH severity findings">
+      <check if="HIGH severity findings exist">
+        <action>For each HIGH severity finding:</action>
+        <action>- Analyze root cause</action>
+        <action>- Apply fix if possible</action>
+        <action>- Re-run tests to confirm fix doesn't break functionality</action>
+        <action>- Document fix in story file Dev Agent Record</action>
+
+        <check if="HIGH severity finding cannot be auto-fixed">
+          <output>⚠️  **HALT: Unfixable HIGH severity finding**
+
+{{finding_description}}
+
+**Location:** {{file_path}}:{{line_number}}
+
+**Recommended action:** {{recommendation}}
+</output>
+          <action>HALT - manual code review fix needed</action>
+        </check>
+      </check>
+
+      <output>✅ All HIGH severity findings addressed</output>
+    </step>
+
+    <step n="5.3" goal="Document MEDIUM/LOW findings">
+      <action>Add code review findings to story file Dev Agent Record</action>
+      <action>Include: severity, location, description, recommendation</action>
+      <action>Save story file</action>
+      <output>✅ Code review findings documented: {{finding_count}} total ({{high_count}} HIGH, {{medium_count}} MEDIUM, {{low_count}} LOW)</output>
+    </step>
+
+    <output>✅ **Phase 5 complete** - Code review executed and findings addressed</output>
+  </phase>
+
+  <!-- ============================================================= -->
+  <!-- PHASE 6: SUMMARY                                              -->
+  <!-- ============================================================= -->
+  <phase n="6" name="SUMMARY" icon="🏁">
+    <output>🏁 **PHASE 6: PIPELINE SUMMARY**</output>
+
+    <step n="6.1" goal="Generate pipeline report">
+      <action>Collect metrics from all phases</action>
+      <action>Calculate total execution time (if available)</action>
+
+      <output>
+**Pipeline Complete for Story: {{story_key}}**
+
+**📊 Metrics:**
+- Tasks completed: {{task_count}}
+- Tests written: {{new_test_count}}
+- Total test suite: {{total_test_count}} tests (100% passing)
+- Files modified: {{file_count}}
+- Code review findings: {{finding_count}} ({{high_count}} HIGH, {{medium_count}} MEDIUM, {{low_count}} LOW)
+
+**✅ All Phases Complete:**
+- ⚡ Phase 0: INIT
+- 📋 Phase 1: VALIDATION & PREPARATION
+- 💻 Phase 2: IMPLEMENTATION (TDD)
+- 🧪 Phase 3: TESTING & LINTING
+- ✅ Phase 4: DEFINITION OF DONE
+- 🔍 Phase 5: CODE REVIEW
+
+**📄 Story Status:** review (ready for human review and merge)
+
+**📁 Story File:** {{story_file_path}}
+
+**🔍 Next Steps:**
+1. Review git diff: `git diff`
+2. Review story file for implementation notes
+3. Review code review findings (if any MEDIUM/LOW items)
+4. Run tests yourself: `pnpm test`
+5. If satisfied, merge branch and update sprint-status.yaml to "done"
+
+**🚀 Ready for Next Story:**
+{{next_story_suggestion}}
+</output>
+    </step>
+
+    <step n="6.2" goal="Remain available for questions">
+      <output>Pipeline execution complete. Available for questions about this implementation.</output>
+      <action>Stay in Nova agent mode</action>
+      <action>Await user input (questions, next pipeline run, or dismiss)</action>
+    </step>
+  </phase>
+
+</workflow>
