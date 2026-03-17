@@ -1,4 +1,5 @@
 import type { SessionRecord, StartSessionInput } from "@/features/sessions/domain/session-start";
+import { attemptSessionRewardClaim } from "@/features/sessions/application/attempt-session-reward";
 import type { Result } from "@/shared/result/result";
 
 type StoredSession = {
@@ -6,7 +7,9 @@ type StoredSession = {
   startedAt: string;
   endedAt: string | null;
   durationSeconds: number;
-  integrityStatus: "running";
+  accumulatedMs: number;
+  lastCheckpointAt: string | null;
+  integrityStatus: "running" | "blocked" | "ready_for_reward";
   createdAt: string;
   updatedAt: string;
 };
@@ -68,6 +71,8 @@ export async function persistSessionStart(input: StartSessionInput): Promise<Res
     startedAt: nowIso,
     endedAt: null,
     durationSeconds: 0,
+    accumulatedMs: 0,
+    lastCheckpointAt: nowIso,
     integrityStatus: "running",
     createdAt: nowIso,
     updatedAt: nowIso
@@ -94,5 +99,129 @@ export async function persistSessionStart(input: StartSessionInput): Promise<Res
   return {
     ok: true,
     data: session
+  };
+}
+
+function updateStoredSession(
+  sessionId: string,
+  updater: (session: StoredSession) => StoredSession
+): Result<StoredSession> {
+  const sessions = readStoredArray<StoredSession>(WEB_SESSIONS_KEY);
+  const index = sessions.findIndex((session) => session.id === sessionId);
+
+  if (index < 0) {
+    return {
+      ok: false,
+      error: {
+        code: "SESSION_NOT_FOUND",
+        message: "Session record was not found",
+        retriable: false
+      }
+    };
+  }
+
+  const updatedSession = updater(sessions[index]);
+  sessions[index] = updatedSession;
+  writeStoredArray(WEB_SESSIONS_KEY, sessions);
+
+  return {
+    ok: true,
+    data: updatedSession
+  };
+}
+
+export async function persistSessionIntegrityCheckpoint(input: {
+  sessionId: string;
+  accumulatedMs: number;
+  lastCheckpointAtIso: string;
+}): Promise<Result<void>> {
+  const updated = updateStoredSession(input.sessionId, (session) => ({
+    ...session,
+    accumulatedMs: input.accumulatedMs,
+    lastCheckpointAt: input.lastCheckpointAtIso,
+    updatedAt: input.lastCheckpointAtIso
+  }));
+
+  if (!updated.ok) {
+    return updated;
+  }
+
+  return { ok: true, data: undefined };
+}
+
+export async function claimSessionReward(input: {
+  sessionId: string;
+  nowMs?: number;
+  correlationId: string;
+  minimumDurationMs?: number;
+}): Promise<Result<{ elapsedMs: number; remainingMs: number }>> {
+  const repository = {
+    async getSessionForRewardClaim(sessionId: string): Promise<Result<SessionRecord>> {
+      const sessions = readStoredArray<StoredSession>(WEB_SESSIONS_KEY);
+      const session = sessions.find((row) => row.id === sessionId);
+      if (!session) {
+        return {
+          ok: false,
+          error: {
+            code: "SESSION_NOT_FOUND",
+            message: "Session record was not found",
+            retriable: false
+          }
+        };
+      }
+
+      return {
+        ok: true,
+        data: session
+      };
+    },
+    async updateIntegrityForRewardAttempt(params: {
+      sessionId: string;
+      accumulatedMs: number;
+      lastCheckpointAt: string;
+      integrityStatus: "blocked" | "ready_for_reward";
+    }): Promise<Result<void>> {
+      const updated = updateStoredSession(params.sessionId, (session) => ({
+        ...session,
+        accumulatedMs: params.accumulatedMs,
+        lastCheckpointAt: params.lastCheckpointAt,
+        integrityStatus: params.integrityStatus,
+        updatedAt: params.lastCheckpointAt
+      }));
+
+      if (!updated.ok) {
+        return updated;
+      }
+
+      return { ok: true, data: undefined };
+    }
+  };
+
+  return attemptSessionRewardClaim(
+    repository,
+    input,
+    async () => ({ ok: true, data: undefined }),
+    {
+      onIntegrityBlockedEvent: (event) => {
+        console.info("session.integrity.blocked", {
+          feature: "sessions",
+          operation: "claimSessionReward",
+          correlationId: input.correlationId,
+          errorCode: event.payload.reasonCode,
+          event
+        });
+      }
+    }
+  );
+}
+
+export async function loadActiveSession(): Promise<Result<SessionRecord | null>> {
+  const sessions = readStoredArray<StoredSession>(WEB_SESSIONS_KEY);
+  const sorted = [...sessions].sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  const latest = sorted.find((session) => session.endedAt === null) ?? null;
+
+  return {
+    ok: true,
+    data: latest
   };
 }
