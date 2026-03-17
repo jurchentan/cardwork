@@ -3,6 +3,9 @@ import { classifyAndPersistSessionIntent } from "@/features/classification/appli
 import { createRemoteClassifierProvider } from "@/features/classification/infrastructure/remote-classifier-provider";
 import type { ClassifierSource, WorkTypeTag } from "@/features/classification/domain/work-type";
 import { attemptSessionRewardClaim } from "@/features/sessions/application/attempt-session-reward";
+import { submitSessionReflection } from "@/features/sessions/application/submit-session-reflection";
+import type { SessionReflectionMode } from "@/features/sessions/domain/session-reflection";
+import { createRemoteReflectionPlausibilityProvider } from "@/features/sessions/infrastructure/remote-reflection-plausibility-provider";
 import type { Result } from "@/shared/result/result";
 
 type StoredSession = {
@@ -29,6 +32,17 @@ type StoredSessionIntent = {
 
 const WEB_SESSIONS_KEY = "cardwork:web:sessions";
 const WEB_SESSION_INTENTS_KEY = "cardwork:web:session-intents";
+const WEB_SESSION_REFLECTIONS_KEY = "cardwork:web:session-reflections";
+
+type StoredSessionReflection = {
+  id: string;
+  sessionId: string;
+  reflectionText: string | null;
+  reflectionMode: SessionReflectionMode;
+  plausibilityStatus: "plausible" | "implausible";
+  revengeTaskAssigned: boolean;
+  createdAt: string;
+};
 
 function readStoredArray<T>(key: string): T[] {
   if (typeof window === "undefined") {
@@ -318,4 +332,65 @@ export async function loadActiveSession(): Promise<Result<SessionRecord | null>>
     ok: true,
     data: latest
   };
+}
+
+export async function persistSessionReflection(input: {
+  sessionId: string;
+  reflectionText: string;
+  reflectionMode: SessionReflectionMode;
+}): Promise<
+  Result<{
+    plausibilityStatus: "plausible" | "implausible";
+    rewardEligible: boolean;
+    revengeTaskAssigned: boolean;
+    reasonCode: "REFLECTION_EMPTY" | "REFLECTION_TOO_SHORT" | "REFLECTION_FALLBACK_LOCAL_RULES" | null;
+  }>
+> {
+  const plausibilityProvider = createRemoteReflectionPlausibilityProvider({
+    isOnline: () => (typeof navigator !== "undefined" ? navigator.onLine : true)
+  });
+
+  return submitSessionReflection(
+    {
+      async getSessionForRewardClaim(sessionId: string): Promise<Result<SessionRecord>> {
+        const sessions = readStoredArray<StoredSession>(WEB_SESSIONS_KEY);
+        const session = sessions.find((row) => row.id === sessionId);
+        if (!session) {
+          return {
+            ok: false,
+            error: {
+              code: "SESSION_NOT_FOUND",
+              message: "Session record was not found",
+              retriable: false
+            }
+          };
+        }
+
+        return {
+          ok: true,
+          data: session
+        };
+      },
+      async createSessionReflection(reflectionInput) {
+        const nowIso = new Date().toISOString();
+        const reflections = readStoredArray<StoredSessionReflection>(WEB_SESSION_REFLECTIONS_KEY);
+        reflections.push({
+          id: `web-reflection-${Date.now()}`,
+          sessionId: reflectionInput.sessionId,
+          reflectionText: reflectionInput.reflectionText.trim(),
+          reflectionMode: reflectionInput.reflectionMode,
+          plausibilityStatus: reflectionInput.plausibilityStatus,
+          revengeTaskAssigned: reflectionInput.revengeTaskAssigned,
+          createdAt: nowIso
+        });
+
+        writeStoredArray(WEB_SESSION_REFLECTIONS_KEY, reflections);
+        return { ok: true, data: undefined };
+      }
+    },
+    input,
+    {
+      plausibilityProvider
+    }
+  );
 }

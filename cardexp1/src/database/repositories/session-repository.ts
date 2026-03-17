@@ -7,6 +7,11 @@ import type {
   StartSessionInput
 } from "@/features/sessions/domain/session-start";
 import type {
+  ReflectionPlausibilityStatus,
+  SessionReflectionMode,
+  SessionReflectionRecord
+} from "@/features/sessions/domain/session-reflection";
+import type {
   ClassifierSource,
   WorkTypeTag
 } from "@/features/classification/domain/work-type";
@@ -40,6 +45,16 @@ type SessionIntentRow = {
   input_mode: string;
   work_type_tag: WorkTypeTag | null;
   classifier_source: ClassifierSource | null;
+  created_at: string;
+};
+
+type SessionReflectionRow = {
+  id: string;
+  session_id: string;
+  reflection_text: string | null;
+  reflection_mode: SessionReflectionMode;
+  plausibility_status: ReflectionPlausibilityStatus;
+  revenge_task_assigned: number;
   created_at: string;
 };
 
@@ -154,6 +169,91 @@ export class SessionRepository {
       return { ok: true, data: undefined };
     } catch {
       return databaseErrorResult("Unable to persist intent classification");
+    }
+  }
+
+  async createSessionReflection(input: {
+    sessionId: string;
+    reflectionText: string;
+    reflectionMode: SessionReflectionMode;
+    plausibilityStatus: ReflectionPlausibilityStatus;
+    revengeTaskAssigned: boolean;
+  }): Promise<Result<void>> {
+    const nowIso = new Date().toISOString();
+    const reflectionId = createId("reflection");
+
+    try {
+      await this.db.runAsync(
+        "INSERT INTO session_reflections (id, session_id, reflection_text, reflection_mode, plausibility_status, revenge_task_assigned, created_at) VALUES ($id, $session_id, $reflection_text, $reflection_mode, $plausibility_status, $revenge_task_assigned, $created_at)",
+        {
+          $id: reflectionId,
+          $session_id: input.sessionId,
+          $reflection_text: input.reflectionText.trim(),
+          $reflection_mode: input.reflectionMode,
+          $plausibility_status: input.plausibilityStatus,
+          $revenge_task_assigned: input.revengeTaskAssigned ? 1 : 0,
+          $created_at: nowIso
+        }
+      );
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to persist session reflection");
+    }
+  }
+
+  async updateSessionReflection(input: {
+    sessionId: string;
+    reflectionText: string;
+    reflectionMode: SessionReflectionMode;
+    plausibilityStatus: ReflectionPlausibilityStatus;
+    revengeTaskAssigned: boolean;
+  }): Promise<Result<void>> {
+    try {
+      await this.db.runAsync(
+        "UPDATE session_reflections SET reflection_text = $reflection_text, reflection_mode = $reflection_mode, plausibility_status = $plausibility_status, revenge_task_assigned = $revenge_task_assigned WHERE id = (SELECT id FROM session_reflections WHERE session_id = $session_id ORDER BY created_at DESC LIMIT 1)",
+        {
+          $session_id: input.sessionId,
+          $reflection_text: input.reflectionText.trim(),
+          $reflection_mode: input.reflectionMode,
+          $plausibility_status: input.plausibilityStatus,
+          $revenge_task_assigned: input.revengeTaskAssigned ? 1 : 0
+        }
+      );
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to update session reflection");
+    }
+  }
+
+  async listSessionReflectionsBySessionId(sessionId: string): Promise<Result<SessionReflectionRecord[]>> {
+    try {
+      const rows = await this.db.getAllAsync<SessionReflectionRow>(
+        "SELECT id, session_id, reflection_text, reflection_mode, plausibility_status, revenge_task_assigned, created_at FROM session_reflections WHERE session_id = $session_id ORDER BY created_at ASC",
+        { $session_id: sessionId }
+      );
+
+      return {
+        ok: true,
+        data: rows.map((row) => {
+          const mapped = mapRowToCamelCase<{
+            id: string;
+            sessionId: string;
+            reflectionText: string | null;
+            reflectionMode: SessionReflectionMode;
+            plausibilityStatus: ReflectionPlausibilityStatus;
+            revengeTaskAssigned: number;
+            createdAt: string;
+          }>(row);
+          return {
+            ...mapped,
+            revengeTaskAssigned: mapped.revengeTaskAssigned === 1
+          };
+        })
+      };
+    } catch {
+      return databaseErrorResult("Unable to read session reflections");
     }
   }
 
