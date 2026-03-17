@@ -9,8 +9,11 @@ export default function SessionScreen() {
   const [inputMode, setInputMode] = useState<"text" | "voice">("text");
   const [isSaving, setIsSaving] = useState(false);
   const [startedAt, setStartedAt] = useState<string | null>(null);
+  const [sessionId, setSessionId] = useState<string | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [tapCount, setTapCount] = useState(0);
+  const [status, setStatus] = useState<"idle" | "saving" | "started" | "error">("idle");
 
   useEffect(() => {
     if (!startedAt) {
@@ -27,20 +30,31 @@ export default function SessionScreen() {
   }, [startedAt]);
 
   async function onStartSession(): Promise<void> {
+    setTapCount((value) => value + 1);
     setIsSaving(true);
+    setStatus("saving");
     setErrorMessage(null);
 
-    const request = buildStartSessionInput(intentText, inputMode);
-    const result = await persistSessionStart(request);
+    try {
+      const request = buildStartSessionInput(intentText, inputMode);
+      const result = await persistSessionStart(request);
 
-    if (!result.ok) {
-      setErrorMessage(result.error.message);
+      if (!result.ok) {
+        setErrorMessage(result.error.message);
+        setStatus("error");
+        return;
+      }
+
+      setStartedAt(result.data.startedAt);
+      setSessionId(result.data.id);
+      setStatus("started");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unexpected start failure";
+      setErrorMessage(message);
+      setStatus("error");
+    } finally {
       setIsSaving(false);
-      return;
     }
-
-    setStartedAt(result.data.startedAt);
-    setIsSaving(false);
   }
 
   return (
@@ -76,8 +90,19 @@ export default function SessionScreen() {
         <Text style={styles.startButtonLabel}>{isSaving ? "Starting..." : "Start Session"}</Text>
       </Pressable>
 
+      <View style={styles.debugBox}>
+        <Text style={styles.debugText}>Button taps: {tapCount}</Text>
+        <Text style={styles.debugText}>Status: {status}</Text>
+      </View>
+
       {inputMode === "voice" ? <Text style={styles.hint}>Voice uses text fallback in this story.</Text> : null}
-      {startedAt ? <Text style={styles.running}>Timer running: {elapsedSeconds}s</Text> : null}
+      {status === "started" && startedAt ? (
+        <View style={styles.runningBanner}>
+          <Text style={styles.runningTitle}>Session Started</Text>
+          <Text style={styles.runningTime}>{elapsedSeconds}s</Text>
+          <Text style={styles.runningMeta}>ID: {sessionId}</Text>
+        </View>
+      ) : null}
       {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
     </View>
   );
@@ -135,8 +160,43 @@ const styles = StyleSheet.create({
     color: "#6b7280",
     fontSize: 12
   },
-  running: {
-    color: "#065f46",
+  debugBox: {
+    backgroundColor: "#f3f4f6",
+    borderRadius: 8,
+    gap: 2,
+    paddingHorizontal: 10,
+    paddingVertical: 8
+  },
+  debugText: {
+    color: "#1f2937",
+    fontSize: 12,
+    fontWeight: "600"
+  },
+  runningBanner: {
+    alignItems: "center",
+    backgroundColor: "#dcfce7",
+    borderColor: "#16a34a",
+    borderRadius: 10,
+    borderWidth: 2,
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  runningTitle: {
+    color: "#166534",
+    fontSize: 16,
+    fontWeight: "800",
+    letterSpacing: 0.5,
+    textTransform: "uppercase"
+  },
+  runningTime: {
+    color: "#14532d",
+    fontSize: 30,
+    fontWeight: "900"
+  },
+  runningMeta: {
+    color: "#15803d",
+    fontSize: 12,
     fontWeight: "600"
   },
   error: {
