@@ -4,6 +4,9 @@ import { classifyAndPersistSessionIntent } from "@/features/classification/appli
 import { createRemoteClassifierProvider } from "@/features/classification/infrastructure/remote-classifier-provider";
 import type { WorkTypeTag } from "@/features/classification/domain/work-type";
 import { attemptSessionRewardClaim } from "@/features/sessions/application/attempt-session-reward";
+import { submitSessionReflection } from "@/features/sessions/application/submit-session-reflection";
+import type { SessionReflectionMode } from "@/features/sessions/domain/session-reflection";
+import { createRemoteReflectionPlausibilityProvider } from "@/features/sessions/infrastructure/remote-reflection-plausibility-provider";
 import { startSession } from "@/features/sessions/application/start-session";
 import type { SessionRecord, StartSessionInput } from "@/features/sessions/domain/session-start";
 import type { Result } from "@/shared/result/result";
@@ -95,4 +98,25 @@ export async function loadActiveSession(): Promise<Result<SessionRecord | null>>
   const db = await initializeDatabase();
   const repository = new SessionRepository(db);
   return repository.getLatestRunningSession();
+}
+
+export async function persistSessionReflection(input: {
+  sessionId: string;
+  reflectionText: string;
+  reflectionMode: SessionReflectionMode;
+}): Promise<
+  Result<{
+    plausibilityStatus: "plausible" | "implausible";
+    rewardEligible: boolean;
+    revengeTaskAssigned: boolean;
+    reasonCode: "REFLECTION_EMPTY" | "REFLECTION_TOO_SHORT" | "REFLECTION_FALLBACK_LOCAL_RULES" | null;
+  }>
+> {
+  const db = await initializeDatabase();
+  const repository = new SessionRepository(db);
+  const plausibilityProvider = createRemoteReflectionPlausibilityProvider();
+
+  return submitSessionReflection(repository, input, {
+    plausibilityProvider
+  });
 }

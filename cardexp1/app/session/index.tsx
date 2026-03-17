@@ -8,6 +8,7 @@ import {
   classifySessionIntentWithFallback,
   loadActiveSession,
   persistManualIntentClassification,
+  persistSessionReflection,
   persistSessionIntegrityCheckpoint,
   persistSessionStart
 } from "@/features/sessions/infrastructure/start-session-persistence";
@@ -17,6 +18,7 @@ import {
 } from "@/features/sessions/infrastructure/session-timer-lifecycle";
 import { buildStartSessionInput } from "@/features/sessions/ui/session-start-flow";
 import type { WorkTypeTag } from "@/features/classification/domain/work-type";
+import type { SessionReflectionMode } from "@/features/sessions/domain/session-reflection";
 
 const DEBUG_MINIMUM_SESSION_DURATION_MS = 30 * 1000;
 
@@ -27,6 +29,7 @@ export default function SessionScreen() {
   const [isClassifyingSession, setIsClassifyingSession] = useState(false);
   const [isSavingManualTag, setIsSavingManualTag] = useState(false);
   const [isClaiming, setIsClaiming] = useState(false);
+  const [isSubmittingReflection, setIsSubmittingReflection] = useState(false);
   const [session, setSession] = useState<SessionRecord | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -36,6 +39,9 @@ export default function SessionScreen() {
   const [debugFastIntegrityGateEnabled, setDebugFastIntegrityGateEnabled] = useState(false);
   const [classifiedTag, setClassifiedTag] = useState<string | null>(null);
   const [manualTagOptions, setManualTagOptions] = useState<{ tag: WorkTypeTag; label: string }[]>([]);
+  const [reflectionText, setReflectionText] = useState("");
+  const [reflectionMode, setReflectionMode] = useState<SessionReflectionMode>("text");
+  const [reflectionOutcome, setReflectionOutcome] = useState<"plausible" | "implausible" | null>(null);
 
   const minimumDurationMs = debugFastIntegrityGateEnabled ? DEBUG_MINIMUM_SESSION_DURATION_MS : undefined;
 
@@ -160,6 +166,8 @@ export default function SessionScreen() {
       setElapsedSeconds(0);
       setStatus("started");
       setStatusMessage("Session timer is running.");
+      setReflectionText("");
+      setReflectionOutcome(null);
 
       setIsClassifyingSession(true);
       const classificationResult = await classifySessionIntentWithFallback({
@@ -258,9 +266,42 @@ export default function SessionScreen() {
         };
       });
       setStatus("started");
-      setStatusMessage("Integrity gate passed. Reward flow can continue.");
+      setStatusMessage("Integrity gate passed. Submit your reflection to continue.");
     } finally {
       setIsClaiming(false);
+    }
+  }
+
+  async function onSubmitReflection(): Promise<void> {
+    if (!session) {
+      return;
+    }
+
+    setIsSubmittingReflection(true);
+    setErrorMessage(null);
+
+    try {
+      const result = await persistSessionReflection({
+        sessionId: session.id,
+        reflectionText,
+        reflectionMode
+      });
+
+      if (!result.ok) {
+        setStatus("error");
+        setErrorMessage(result.error.message);
+        return;
+      }
+
+      setReflectionOutcome(result.data.plausibilityStatus);
+      if (result.data.plausibilityStatus === "plausible") {
+        setStatusMessage("Reflection accepted. Reward flow is now eligible for card award.");
+      } else {
+        setStatusMessage("Reflection rejected: please provide a longer, specific summary. Revenge Task may be assigned.");
+      }
+      setStatus("started");
+    } finally {
+      setIsSubmittingReflection(false);
     }
   }
 
@@ -293,7 +334,7 @@ export default function SessionScreen() {
         value={intentText}
       />
       <Text style={styles.aiNote}>
-        AI note: more specific goals improve classification quality (for example, "Write 400 words of the intro" instead of "Work").
+        AI note: more specific goals improve classification quality (for example, &quot;Write 400 words of the intro&quot; instead of &quot;Work&quot;).
       </Text>
 
       <Pressable accessibilityRole="button" disabled={isSaving} onPress={onStartSession} style={styles.startButton}>
@@ -355,6 +396,49 @@ export default function SessionScreen() {
             <Text style={styles.claimButtonLabel}>{isClaiming ? "Checking..." : "End Session and Claim Reward"}</Text>
           </Pressable>
         </View>
+      ) : null}
+      {session?.integrityStatus === "ready_for_reward" && reflectionOutcome !== "plausible" ? (
+        <View style={styles.reflectionBox}>
+          <Text style={styles.reflectionTitle}>Post-Session Reflection</Text>
+          <View style={styles.modeRow}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setReflectionMode("text")}
+              style={[styles.modeButton, reflectionMode === "text" && styles.modeButtonActive]}
+            >
+              <Text style={styles.modeLabel}>Text</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setReflectionMode("voice")}
+              style={[styles.modeButton, reflectionMode === "voice" && styles.modeButtonActive]}
+            >
+              <Text style={styles.modeLabel}>Voice</Text>
+            </Pressable>
+          </View>
+          <TextInput
+            multiline
+            onChangeText={setReflectionText}
+            placeholder="What did you actually complete this session?"
+            style={styles.reflectionInput}
+            value={reflectionText}
+          />
+          <Pressable
+            accessibilityRole="button"
+            disabled={isSubmittingReflection}
+            onPress={() => {
+              void onSubmitReflection();
+            }}
+            style={styles.submitReflectionButton}
+          >
+            <Text style={styles.submitReflectionLabel}>{isSubmittingReflection ? "Checking..." : "Submit Reflection"}</Text>
+          </Pressable>
+        </View>
+      ) : null}
+      {reflectionOutcome ? (
+        <Text style={reflectionOutcome === "plausible" ? styles.success : styles.error}>
+          Reflection status: {reflectionOutcome}
+        </Text>
       ) : null}
       {statusMessage ? <Text style={styles.success}>{statusMessage}</Text> : null}
       {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
@@ -470,6 +554,39 @@ const styles = StyleSheet.create({
   },
   manualTagButtonLabel: {
     color: "#1e40af",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  reflectionBox: {
+    backgroundColor: "#f8fafc",
+    borderColor: "#cbd5e1",
+    borderRadius: 8,
+    borderWidth: 1,
+    gap: 8,
+    padding: 10
+  },
+  reflectionTitle: {
+    color: "#0f172a",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  reflectionInput: {
+    borderColor: "#cbd5e1",
+    borderRadius: 8,
+    borderWidth: 1,
+    minHeight: 72,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    textAlignVertical: "top"
+  },
+  submitReflectionButton: {
+    alignItems: "center",
+    backgroundColor: "#1d4ed8",
+    borderRadius: 8,
+    paddingVertical: 10
+  },
+  submitReflectionLabel: {
+    color: "#ffffff",
     fontSize: 12,
     fontWeight: "700"
   },

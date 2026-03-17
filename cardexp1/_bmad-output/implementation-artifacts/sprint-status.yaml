@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-17T03:03:36+00:00
-last_updated: 2026-03-17T22:07:26+00:00
+last_updated: 2026-03-17T23:03:42+00:00
 project: cardexp1
 project_key: NOKEY
 tracking_system: file-system
@@ -47,7 +47,7 @@ development_status:
   1-2-capture-session-intent-and-start-a-session-in-two-taps: done
   1-3-classify-intent-with-offline-manual-fallback: review
   1-4-enforce-30-minute-integrity-gate-with-reliable-timer: done
-  1-5-submit-reflection-and-run-plausibility-check: backlog
+  1-5-submit-reflection-and-run-plausibility-check: done
   1-6-award-and-reveal-card-then-persist-session-outcome: backlog
   epic-1-retrospective: optional
 
