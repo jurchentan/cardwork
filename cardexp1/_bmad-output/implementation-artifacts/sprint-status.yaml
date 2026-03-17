@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-03-17T03:03:36+00:00
-last_updated: 2026-03-17T03:39:14+00:00
+last_updated: 2026-03-17T03:42:08+00:00
 project: cardexp1
 project_key: NOKEY
 tracking_system: file-system
@@ -88,7 +88,7 @@ development_status:
   epic-5-retrospective: optional
 
   epic-6: in-progress
-  6-1-establish-offline-first-local-data-layer-with-sqlite: in-progress
+  6-1-establish-offline-first-local-data-layer-with-sqlite: review
   6-2-implement-crash-safe-write-and-recovery-guarantees: backlog
   6-3-build-offline-ai-fallback-and-intent-outbox-handling: backlog
   6-4-meet-cold-start-performance-budget: backlog
