@@ -1,3 +1,5 @@
+import type { ClassifierSource, WorkTypeTag } from "@/features/classification/domain/work-type";
+
 export const SESSION_INTENT_MODES = ["text", "voice"] as const;
 
 export type SessionIntentMode = (typeof SESSION_INTENT_MODES)[number];
@@ -24,8 +26,8 @@ export type SessionIntentRecord = {
   sessionId: string;
   intentText: string;
   inputMode: SessionIntentMode;
-  workTypeTag: string | null;
-  classifierSource: string | null;
+  workTypeTag: WorkTypeTag | null;
+  classifierSource: ClassifierSource | null;
   createdAt: string;
 };
 
