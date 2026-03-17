@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useRouter } from "expo-router";
-import { Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
   getSessionHomePrimaryActionRoute,
@@ -19,11 +19,6 @@ export default function HomeScreen() {
         accessibilityRole="button"
         onPress={() => {
           setTapCount((value) => value + 1);
-          if (Platform.OS === "web") {
-            window.location.assign(getSessionHomePrimaryActionRoute());
-            return;
-          }
-
           router.push(getSessionHomePrimaryActionRoute() as never);
         }}
         style={styles.startButton}

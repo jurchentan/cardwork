@@ -1,6 +1,6 @@
 # Story 1.2: Capture Session Intent and Start a Session in Two Taps
 
-Status: review
+Status: done
 
 ## Story
 
@@ -147,15 +147,21 @@ openai/gpt-5.3-codex
 - Implemented repository transaction write path for `sessions` and `session_intents` with timestamped atomic persistence.
 - Added deterministic tests for intent mode validation, validation error envelopes, two-tap flow contract, and persisted session-intent linkage.
 - Completed full validation gates and moved story status to `review`.
+- Code-review fixes applied: active `/session` route now uses persistence-capable screen implementation, stale route file references removed, and route navigation restored to router push flow.
+- Web fallback now saves session and intent payloads in local storage to satisfy saved-intent behavior when SQLite web runtime is unavailable.
 
 ### File List
 
 - _bmad-output/implementation-artifacts/1-2-capture-session-intent-and-start-a-session-in-two-taps.md
 - _bmad-output/implementation-artifacts/sprint-status.yaml
+- .gitignore
 - app/index.tsx
 - app/session/index.tsx
+- src/app/_layout.tsx
 - src/app/index.tsx
-- src/app/session/index.tsx
+- src/app/session.tsx
+- src/components/animated-icon.tsx
+- src/components/app-tabs.tsx
 - src/database/repositories/mappers.ts
 - src/database/repositories/session-repository.ts
 - src/features/sessions/application/start-session.ts
@@ -167,6 +173,30 @@ openai/gpt-5.3-codex
 - tests/sessions/start-session.domain.test.ts
 - tests/sessions/start-session.integration.test.ts
 
+## Senior Developer Review (AI)
+
+### Review Date
+
+2026-03-17
+
+### Outcome
+
+Approve
+
+### Summary
+
+- Verified AC implementation against active `src/app` routes and fixed divergence where `/session` previously rendered a UI-only fallback without persistence.
+- Confirmed two-tap path behavior from home to session start and running timer feedback.
+- Confirmed saved-intent behavior on web fallback path using local storage persistence and validation error envelope handling.
+
+### Action Items
+
+- [x] [HIGH] Restore AC-compliant behavior on active `/session` route by removing UI-only fallback and using persistence-capable implementation.
+- [x] [HIGH] Resolve task-claim mismatch between story completion and runtime route behavior.
+- [x] [MEDIUM] Sync story File List with actual changed files and route file rename.
+- [x] [MEDIUM] Remove `window.location.assign` workaround and return to router-based navigation flow.
+
 ## Change Log
 
 - 2026-03-17: Implemented Story 1.2 session intent capture and session start flow with repository persistence, added unit/integration coverage, and advanced status to review.
+- 2026-03-17: Completed code-review remediation, resolved route/persistence discrepancies, and set story status to done.
