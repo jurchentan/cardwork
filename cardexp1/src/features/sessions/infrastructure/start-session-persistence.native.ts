@@ -1,5 +1,8 @@
 import { initializeDatabase } from "@/database/client";
+import { CardRepository } from "@/database/repositories/card-repository";
+import { DeckRepository } from "@/database/repositories/deck-repository";
 import { SessionRepository } from "@/database/repositories/session-repository";
+import { resolveSessionReward } from "@/features/cards/application/resolve-session-reward";
 import { classifyAndPersistSessionIntent } from "@/features/classification/application/classify-and-persist-session-intent";
 import { createRemoteClassifierProvider } from "@/features/classification/infrastructure/remote-classifier-provider";
 import type { WorkTypeTag } from "@/features/classification/domain/work-type";
@@ -36,14 +39,112 @@ export async function claimSessionReward(input: {
   nowMs?: number;
   correlationId: string;
   minimumDurationMs?: number;
-}): Promise<Result<{ elapsedMs: number; remainingMs: number }>> {
+  reflectionPlausible?: boolean;
+}): Promise<
+  Result<{
+    elapsedMs: number;
+    remainingMs: number;
+    reward: {
+      cardId: string;
+      cardName: string;
+      cardTypeTag: "focus" | "body" | "mind" | "rest";
+      revealDurationMs: number;
+      earnedAt: string;
+    };
+  }>
+> {
   const db = await initializeDatabase();
-  const repository = new SessionRepository(db);
+  const sessionRepository = new SessionRepository(db);
+  const cardRepository = new CardRepository(db);
+  const deckRepository = new DeckRepository(db);
 
   return attemptSessionRewardClaim(
-    repository,
+    sessionRepository,
     input,
-    async () => ({ ok: true, data: undefined }),
+    async () => {
+      const session = await sessionRepository.getSessionForRewardClaim(input.sessionId);
+      if (!session.ok) {
+        return session;
+      }
+
+      const classification = await sessionRepository.getLatestIntentClassification(input.sessionId);
+      if (!classification.ok) {
+        return classification;
+      }
+
+      const reflectionPlausibleResult =
+        typeof input.reflectionPlausible === "boolean"
+          ? ({ ok: true, data: input.reflectionPlausible } as const)
+          : await sessionRepository.hasPlausibleReflection(input.sessionId);
+
+      if (!reflectionPlausibleResult.ok) {
+        return reflectionPlausibleResult;
+      }
+
+      const nowIso = new Date(input.nowMs ?? Date.now()).toISOString();
+      const resolution = resolveSessionReward({
+        sessionId: input.sessionId,
+        sessionEndedAt: session.data.endedAt,
+        elapsedMs: Math.max(session.data.accumulatedMs, 0),
+        workTypeTag: classification.data.workTypeTag,
+        reflectionPlausible: reflectionPlausibleResult.data,
+        nowIso
+      });
+
+      if (!resolution.ok) {
+        return resolution;
+      }
+
+      try {
+        await db.withTransactionAsync(async () => {
+          const cardInsert = await cardRepository.createCard(resolution.data.card);
+          if (!cardInsert.ok) {
+            throw new Error(cardInsert.error.code);
+          }
+
+          const weeklyDeckInsert = await deckRepository.addCardToWeeklyDeck({
+            id: `weekly-deck-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            weekStartDate: resolution.data.weekStartDate,
+            cardId: resolution.data.card.id,
+            sourceType: "session_reward",
+            earnedAt: resolution.data.earnedAt
+          });
+          if (!weeklyDeckInsert.ok) {
+            throw new Error(weeklyDeckInsert.error.code);
+          }
+
+          const sessionFinalize = await sessionRepository.finalizeSessionReward({
+            sessionId: input.sessionId,
+            endedAt: resolution.data.earnedAt,
+            durationSeconds: resolution.data.durationSeconds,
+            integrityStatus: "ready_for_reward"
+          });
+          if (!sessionFinalize.ok) {
+            throw new Error(sessionFinalize.error.code);
+          }
+        });
+      } catch {
+        return {
+          ok: false,
+          error: {
+            code: "REWARD_PERSISTENCE_FAILED",
+            message: "Unable to persist reward outcome.",
+            retriable: true
+          }
+        };
+      }
+
+      return {
+        ok: true,
+        data: {
+          cardId: resolution.data.card.id,
+          cardName: resolution.data.card.cardName,
+          cardTypeTag: resolution.data.card.cardTypeTag,
+          revealDurationMs: 1200,
+          earnedAt: resolution.data.earnedAt
+        }
+      };
+    },
     {
       onIntegrityBlockedEvent: (event) => {
         console.info("session.integrity.blocked", {

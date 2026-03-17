@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { AppState, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Animated, AppState, Easing, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
 import { evaluateSessionIntegrityGate } from "@/features/sessions/domain/session-integrity";
 import type { SessionRecord } from "@/features/sessions/domain/session-start";
@@ -20,7 +20,7 @@ import { buildStartSessionInput } from "@/features/sessions/ui/session-start-flo
 import type { WorkTypeTag } from "@/features/classification/domain/work-type";
 import type { SessionReflectionMode } from "@/features/sessions/domain/session-reflection";
 
-const DEBUG_MINIMUM_SESSION_DURATION_MS = 30 * 1000;
+const DEBUG_MINIMUM_SESSION_DURATION_MS = 3 * 1000;
 
 export default function SessionScreen() {
   const [intentText, setIntentText] = useState("Quick focus sprint");
@@ -42,6 +42,12 @@ export default function SessionScreen() {
   const [reflectionText, setReflectionText] = useState("");
   const [reflectionMode, setReflectionMode] = useState<SessionReflectionMode>("text");
   const [reflectionOutcome, setReflectionOutcome] = useState<"plausible" | "implausible" | null>(null);
+  const [rewardPhase, setRewardPhase] = useState<"idle" | "revealing" | "revealed" | "complete">("idle");
+  const [revealedReward, setRevealedReward] = useState<{
+    cardName: string;
+    cardTypeTag: "focus" | "body" | "mind" | "rest";
+  } | null>(null);
+  const revealProgress = useRef(new Animated.Value(0)).current;
 
   const minimumDurationMs = debugFastIntegrityGateEnabled ? DEBUG_MINIMUM_SESSION_DURATION_MS : undefined;
 
@@ -151,6 +157,8 @@ export default function SessionScreen() {
     setStatus("saving");
     setErrorMessage(null);
     setStatusMessage(null);
+    setRewardPhase("idle");
+    setRevealedReward(null);
 
     try {
       const request = buildStartSessionInput(intentText, inputMode);
@@ -235,6 +243,10 @@ export default function SessionScreen() {
       return;
     }
 
+    if (rewardPhase === "revealing") {
+      return;
+    }
+
     setIsClaiming(true);
     setStatus("claiming");
     setErrorMessage(null);
@@ -272,6 +284,57 @@ export default function SessionScreen() {
     }
   }
 
+  async function onClaimRewardAfterReflection(): Promise<void> {
+    if (!session) {
+      return;
+    }
+
+    if (rewardPhase === "revealing") {
+      return;
+    }
+
+    setIsClaiming(true);
+    setErrorMessage(null);
+    setStatusMessage(null);
+
+    try {
+      const result = await claimSessionReward({
+        sessionId: session.id,
+        correlationId: `session-reward-after-reflection-${Date.now()}`,
+        minimumDurationMs,
+        reflectionPlausible: reflectionOutcome === "plausible"
+      });
+
+      if (!result.ok) {
+        setStatus("error");
+        setErrorMessage(result.error.message);
+        return;
+      }
+
+      setRevealedReward({
+        cardName: result.data.reward.cardName,
+        cardTypeTag: result.data.reward.cardTypeTag
+      });
+      setRewardPhase("revealing");
+      revealProgress.setValue(0);
+      Animated.timing(revealProgress, {
+        toValue: 1,
+        duration: result.data.reward.revealDurationMs,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true
+      }).start(() => {
+        setRewardPhase("revealed");
+        setTimeout(() => {
+          setRewardPhase("complete");
+        }, 300);
+      });
+      setStatus("started");
+      setStatusMessage("Reflection accepted. Card reward persisted and reveal started.");
+    } finally {
+      setIsClaiming(false);
+    }
+  }
+
   async function onSubmitReflection(): Promise<void> {
     if (!session) {
       return;
@@ -295,7 +358,7 @@ export default function SessionScreen() {
 
       setReflectionOutcome(result.data.plausibilityStatus);
       if (result.data.plausibilityStatus === "plausible") {
-        setStatusMessage("Reflection accepted. Reward flow is now eligible for card award.");
+        setStatusMessage("Reflection accepted. Click button below to claim your card reward.");
       } else {
         setStatusMessage("Reflection rejected: please provide a longer, specific summary. Revenge Task may be assigned.");
       }
@@ -334,7 +397,7 @@ export default function SessionScreen() {
         value={intentText}
       />
       <Text style={styles.aiNote}>
-        AI note: more specific goals improve classification quality (for example, &quot;Write 400 words of the intro&quot; instead of &quot;Work&quot;).
+        AI note: more specific goals improve classification quality (for example, write 400 words of the intro instead of work).
       </Text>
 
       <Pressable accessibilityRole="button" disabled={isSaving} onPress={onStartSession} style={styles.startButton}>
@@ -353,7 +416,7 @@ export default function SessionScreen() {
         style={[styles.debugToggle, debugFastIntegrityGateEnabled && styles.debugToggleActive]}
       >
         <Text style={styles.debugToggleLabel}>
-          Debug Gate: {debugFastIntegrityGateEnabled ? "30 seconds" : "30 minutes"}
+          Debug Gate: {debugFastIntegrityGateEnabled ? "3 seconds" : "30 minutes"}
         </Text>
       </Pressable>
 
@@ -387,14 +450,25 @@ export default function SessionScreen() {
             {gate?.eligible ? "Integrity Gate: Ready" : `Integrity Gate: ${Math.ceil((gate?.remainingMs ?? 0) / 1000)}s remaining`}
           </Text>
           <Text style={styles.runningMeta}>Work Type: {classifiedTag ?? "pending"}</Text>
-          <Pressable
-            accessibilityRole="button"
-            disabled={isClaiming}
-            onPress={onClaimReward}
-            style={styles.claimButton}
-          >
-            <Text style={styles.claimButtonLabel}>{isClaiming ? "Checking..." : "End Session and Claim Reward"}</Text>
-          </Pressable>
+          {session.integrityStatus !== "ready_for_reward" || reflectionOutcome !== "plausible" ? (
+            <Pressable
+              accessibilityRole="button"
+              disabled={isClaiming || session.integrityStatus === "ready_for_reward"}
+              onPress={onClaimReward}
+              style={styles.claimButton}
+            >
+              <Text style={styles.claimButtonLabel}>{isClaiming ? "Checking..." : "End Session and Claim Reward"}</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              accessibilityRole="button"
+              disabled={isClaiming || rewardPhase === "revealing" || rewardPhase === "revealed"}
+              onPress={onClaimRewardAfterReflection}
+              style={[styles.claimButton, { backgroundColor: "#f59e0b" }]}
+            >
+              <Text style={styles.claimButtonLabel}>{isClaiming ? "Claiming..." : "Claim Card Reward"}</Text>
+            </Pressable>
+          )}
         </View>
       ) : null}
       {session?.integrityStatus === "ready_for_reward" && reflectionOutcome !== "plausible" ? (
@@ -439,6 +513,29 @@ export default function SessionScreen() {
         <Text style={reflectionOutcome === "plausible" ? styles.success : styles.error}>
           Reflection status: {reflectionOutcome}
         </Text>
+      ) : null}
+      {revealedReward ? (
+        <Animated.View
+          style={[
+            styles.revealCard,
+            {
+              opacity: revealProgress,
+              transform: [
+                {
+                  scale: revealProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [0.9, 1]
+                  })
+                }
+              ]
+            }
+          ]}
+        >
+          <Text style={styles.revealLabel}>Card Revealed</Text>
+          <Text style={styles.revealName}>{revealedReward.cardName}</Text>
+          <Text style={styles.revealType}>Type: {revealedReward.cardTypeTag}</Text>
+          <Text style={styles.revealPhase}>Phase: {rewardPhase}</Text>
+        </Animated.View>
       ) : null}
       {statusMessage ? <Text style={styles.success}>{statusMessage}</Text> : null}
       {errorMessage ? <Text style={styles.error}>{errorMessage}</Text> : null}
@@ -629,6 +726,37 @@ const styles = StyleSheet.create({
     color: "#ffffff",
     fontSize: 12,
     fontWeight: "700"
+  },
+  revealCard: {
+    alignItems: "center",
+    backgroundColor: "#fef3c7",
+    borderColor: "#f59e0b",
+    borderRadius: 10,
+    borderWidth: 2,
+    gap: 4,
+    paddingHorizontal: 12,
+    paddingVertical: 10
+  },
+  revealLabel: {
+    color: "#92400e",
+    fontSize: 12,
+    fontWeight: "800",
+    textTransform: "uppercase"
+  },
+  revealName: {
+    color: "#78350f",
+    fontSize: 20,
+    fontWeight: "900"
+  },
+  revealType: {
+    color: "#92400e",
+    fontSize: 12,
+    fontWeight: "700"
+  },
+  revealPhase: {
+    color: "#b45309",
+    fontSize: 11,
+    fontWeight: "600"
   },
   success: {
     color: "#166534"

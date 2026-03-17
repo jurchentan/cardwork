@@ -26,15 +26,32 @@ export type AttemptSessionRewardInput = {
   minimumDurationMs?: number;
 };
 
-export async function attemptSessionRewardClaim(
+export type SessionRewardClaimResult<TReward> = {
+  elapsedMs: number;
+  remainingMs: number;
+  reward: TReward;
+};
+
+export async function attemptSessionRewardClaim<TReward>(
   repository: SessionRewardRepository,
   input: AttemptSessionRewardInput,
-  rewardFlow: () => Promise<Result<void>>,
+  rewardFlow: () => Promise<Result<TReward>>,
   hooks?: AttemptSessionRewardHooks
-): Promise<Result<{ elapsedMs: number; remainingMs: number }>> {
+): Promise<Result<SessionRewardClaimResult<TReward>>> {
   const sessionResult = await repository.getSessionForRewardClaim(input.sessionId);
   if (!sessionResult.ok) {
     return sessionResult;
+  }
+
+  if (sessionResult.data.endedAt) {
+    return {
+      ok: false,
+      error: {
+        code: "REWARD_ALREADY_RESOLVED",
+        message: "This session reward was already resolved.",
+        retriable: false
+      }
+    };
   }
 
   const nowMs = input.nowMs ?? Date.now();
@@ -97,7 +114,8 @@ export async function attemptSessionRewardClaim(
     ok: true,
     data: {
       elapsedMs: gate.elapsedMs,
-      remainingMs: 0
+      remainingMs: 0,
+      reward: rewardResult.data
     }
   };
 }

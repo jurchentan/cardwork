@@ -285,6 +285,61 @@ export class SessionRepository {
     }
   }
 
+  async getLatestIntentClassification(sessionId: string): Promise<Result<{
+    workTypeTag: WorkTypeTag | null;
+    classifierSource: ClassifierSource | null;
+  }>> {
+    try {
+      const rows = await this.db.getAllAsync<Pick<SessionIntentRow, "work_type_tag" | "classifier_source">>(
+        "SELECT work_type_tag, classifier_source FROM session_intents WHERE session_id = $session_id ORDER BY created_at DESC LIMIT 1",
+        { $session_id: sessionId }
+      );
+
+      const latest = rows[0];
+      if (!latest) {
+        return {
+          ok: false,
+          error: {
+            code: "SESSION_INTENT_NOT_FOUND",
+            message: "Session intent was not found",
+            retriable: false
+          }
+        };
+      }
+
+      return {
+        ok: true,
+        data: {
+          workTypeTag: latest.work_type_tag,
+          classifierSource: latest.classifier_source
+        }
+      };
+    } catch {
+      return databaseErrorResult("Unable to read session intent classification");
+    }
+  }
+
+  async hasPlausibleReflection(sessionId: string): Promise<Result<boolean>> {
+    try {
+      const rows = await this.db.getAllAsync<SessionReflectionRow>(
+        "SELECT plausibility_status FROM session_reflections WHERE session_id = $session_id ORDER BY created_at DESC LIMIT 1",
+        { $session_id: sessionId }
+      );
+
+      const latest = rows[0];
+      if (!latest) {
+        return { ok: true, data: false };
+      }
+
+      return {
+        ok: true,
+        data: latest.plausibility_status === "plausible"
+      };
+    } catch {
+      return databaseErrorResult("Unable to evaluate reflection plausibility");
+    }
+  }
+
   async saveIntegrityCheckpoint(params: {
     sessionId: string;
     accumulatedMs: number;
@@ -376,6 +431,30 @@ export class SessionRepository {
       return { ok: true, data: undefined };
     } catch {
       return databaseErrorResult("Unable to mark session ready for reward");
+    }
+  }
+
+  async finalizeSessionReward(input: {
+    sessionId: string;
+    endedAt: string;
+    durationSeconds: number;
+    integrityStatus: "ready_for_reward";
+  }): Promise<Result<void>> {
+    try {
+      await this.db.runAsync(
+        "UPDATE sessions SET ended_at = $ended_at, duration_seconds = $duration_seconds, integrity_status = $integrity_status, updated_at = $updated_at WHERE id = $id",
+        {
+          $id: input.sessionId,
+          $ended_at: input.endedAt,
+          $duration_seconds: input.durationSeconds,
+          $integrity_status: input.integrityStatus,
+          $updated_at: input.endedAt
+        }
+      );
+
+      return { ok: true, data: undefined };
+    } catch {
+      return databaseErrorResult("Unable to finalize session reward outcome");
     }
   }
 

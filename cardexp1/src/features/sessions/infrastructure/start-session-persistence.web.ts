@@ -1,4 +1,5 @@
 import type { SessionRecord, StartSessionInput } from "@/features/sessions/domain/session-start";
+import { resolveSessionReward } from "@/features/cards/application/resolve-session-reward";
 import { classifyAndPersistSessionIntent } from "@/features/classification/application/classify-and-persist-session-intent";
 import { createRemoteClassifierProvider } from "@/features/classification/infrastructure/remote-classifier-provider";
 import type { ClassifierSource, WorkTypeTag } from "@/features/classification/domain/work-type";
@@ -30,19 +31,41 @@ type StoredSessionIntent = {
   createdAt: string;
 };
 
-const WEB_SESSIONS_KEY = "cardwork:web:sessions";
-const WEB_SESSION_INTENTS_KEY = "cardwork:web:session-intents";
-const WEB_SESSION_REFLECTIONS_KEY = "cardwork:web:session-reflections";
+type StoredCard = {
+  id: string;
+  cardName: string;
+  cardTypeTag: "focus" | "body" | "mind" | "rest";
+  damageValue: number;
+  shieldValue: number;
+  effectDescription: string;
+  selectiveCostNotation: string | null;
+  synergyDescription: string | null;
+  createdAt: string;
+};
+
+type StoredWeeklyDeck = {
+  id: string;
+  weekStartDate: string;
+  cardId: string;
+  sourceType: string;
+  earnedAt: string;
+};
 
 type StoredSessionReflection = {
   id: string;
   sessionId: string;
   reflectionText: string | null;
   reflectionMode: SessionReflectionMode;
-  plausibilityStatus: "plausible" | "implausible";
+  plausibilityStatus: string;
   revengeTaskAssigned: boolean;
   createdAt: string;
 };
+
+const WEB_SESSIONS_KEY = "cardwork:web:sessions";
+const WEB_SESSION_INTENTS_KEY = "cardwork:web:session-intents";
+const WEB_SESSION_REFLECTIONS_KEY = "cardwork:web:session-reflections";
+const WEB_CARDS_KEY = "cardwork:web:cards";
+const WEB_WEEKLY_DECKS_KEY = "cardwork:web:weekly-decks";
 
 function readStoredArray<T>(key: string): T[] {
   if (typeof window === "undefined") {
@@ -171,7 +194,20 @@ export async function claimSessionReward(input: {
   nowMs?: number;
   correlationId: string;
   minimumDurationMs?: number;
-}): Promise<Result<{ elapsedMs: number; remainingMs: number }>> {
+  reflectionPlausible?: boolean;
+}): Promise<
+  Result<{
+    elapsedMs: number;
+    remainingMs: number;
+    reward: {
+      cardId: string;
+      cardName: string;
+      cardTypeTag: "focus" | "body" | "mind" | "rest";
+      revealDurationMs: number;
+      earnedAt: string;
+    };
+  }>
+> {
   const repository = {
     async getSessionForRewardClaim(sessionId: string): Promise<Result<SessionRecord>> {
       const sessions = readStoredArray<StoredSession>(WEB_SESSIONS_KEY);
@@ -217,7 +253,80 @@ export async function claimSessionReward(input: {
   return attemptSessionRewardClaim(
     repository,
     input,
-    async () => ({ ok: true, data: undefined }),
+    async () => {
+      const sessions = readStoredArray<StoredSession>(WEB_SESSIONS_KEY);
+      const session = sessions.find((row) => row.id === input.sessionId);
+      if (!session) {
+        return {
+          ok: false,
+          error: {
+            code: "SESSION_NOT_FOUND",
+            message: "Session record was not found",
+            retriable: false
+          }
+        };
+      }
+
+      const latestIntent = [...readStoredArray<StoredSessionIntent>(WEB_SESSION_INTENTS_KEY)]
+        .filter((intent) => intent.sessionId === input.sessionId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0];
+
+      const reflectionPlausibleFromStore = [...readStoredArray<StoredSessionReflection>(WEB_SESSION_REFLECTIONS_KEY)]
+        .filter((reflection) => reflection.sessionId === input.sessionId)
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]?.plausibilityStatus === "plausible";
+
+      const nowIso = new Date(input.nowMs ?? Date.now()).toISOString();
+      const resolution = resolveSessionReward({
+        sessionId: input.sessionId,
+        sessionEndedAt: session.endedAt,
+        elapsedMs: Math.max(session.accumulatedMs, 0),
+        workTypeTag: latestIntent?.workTypeTag ?? null,
+        reflectionPlausible:
+          typeof input.reflectionPlausible === "boolean" ? input.reflectionPlausible : reflectionPlausibleFromStore,
+        nowIso
+      });
+
+      if (!resolution.ok) {
+        return resolution;
+      }
+
+      const cards = readStoredArray<StoredCard>(WEB_CARDS_KEY);
+      cards.push(resolution.data.card);
+      writeStoredArray(WEB_CARDS_KEY, cards);
+
+      const weeklyDeckEntries = readStoredArray<StoredWeeklyDeck>(WEB_WEEKLY_DECKS_KEY);
+      weeklyDeckEntries.push({
+        id: `web-weekly-deck-${Date.now()}`,
+        weekStartDate: resolution.data.weekStartDate,
+        cardId: resolution.data.card.id,
+        sourceType: "session_reward",
+        earnedAt: resolution.data.earnedAt
+      });
+      writeStoredArray(WEB_WEEKLY_DECKS_KEY, weeklyDeckEntries);
+
+      const updated = updateStoredSession(input.sessionId, (currentSession) => ({
+        ...currentSession,
+        endedAt: resolution.data.earnedAt,
+        durationSeconds: resolution.data.durationSeconds,
+        integrityStatus: "ready_for_reward",
+        updatedAt: resolution.data.earnedAt
+      }));
+
+      if (!updated.ok) {
+        return updated;
+      }
+
+      return {
+        ok: true,
+        data: {
+          cardId: resolution.data.card.id,
+          cardName: resolution.data.card.cardName,
+          cardTypeTag: resolution.data.card.cardTypeTag,
+          revealDurationMs: 1200,
+          earnedAt: resolution.data.earnedAt
+        }
+      };
+    },
     {
       onIntegrityBlockedEvent: (event) => {
         console.info("session.integrity.blocked", {
