@@ -25,3 +25,14 @@ export function notImplementedResult<T>(message: string): Result<T> {
     }
   };
 }
+
+export function databaseErrorResult<T>(message: string, retriable = true): Result<T> {
+  return {
+    ok: false,
+    error: {
+      code: "DB_OPERATION_FAILED",
+      message,
+      retriable
+    }
+  };
+}
